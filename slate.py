@@ -200,8 +200,22 @@ def main():
                       "core_pass": 2, "control_pass": 3}
         queue.sort(key=lambda q: (q["kickoff"], tier_order.get(q["tier"], 9),
                                   q["side_of_mechanism"]))
-        print(json.dumps({"season": SEASON, "week": week,
-                          "games": games, "queue": queue}, indent=1))
+        # Sanitize NaN/Infinity → null. Python's json.dumps emits `NaN`
+        # as a literal by default, which is valid Python but rejected by
+        # strict JSON parsers like JavaScript's JSON.parse. `snap_pct`
+        # in particular can be NaN for players with no snap data.
+        import math
+        def _clean(o):
+            if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+                return None
+            if isinstance(o, dict):
+                return {k: _clean(v) for k, v in o.items()}
+            if isinstance(o, list):
+                return [_clean(x) for x in o]
+            return o
+        payload = _clean({"season": SEASON, "week": week,
+                          "games": games, "queue": queue})
+        print(json.dumps(payload, indent=1, allow_nan=False))
         return
 
     week = a.week or D.last_completed_week(SEASON) + 1

@@ -175,6 +175,13 @@
   <div class="card" id="freecard">
     <details id="slatebox">
       <summary>Load a week's slate</summary>
+      <div class="row-btns" style="margin-top:10px">
+        <label style="flex-direction:row;align-items:center;gap:8px;font-size:12px">
+          <span class="lab">Pick file</span>
+          <input type="file" id="slatefile" accept=".json,application/json" style="width:auto">
+        </label>
+        <span class="note" style="margin:0">or paste below</span>
+      </div>
       <textarea id="slatejson" placeholder='paste the JSON from slate.py --json'></textarea>
       <div class="row-btns">
         <button type="button" id="loadslate">Load slate</button>
@@ -309,9 +316,23 @@ $("player").addEventListener("change", () => {
   if (sel && sel.dataset.pos) $("pos").value = sel.dataset.pos;
 });
 
+$("slatefile").addEventListener("change", async (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  try {
+    const text = await f.text();
+    $("slatejson").value = text;
+    note("slatenote", `read ${f.name} (${text.length.toLocaleString()} chars) — hit Load slate`);
+  } catch (err) {
+    note("slatenote", "could not read file: " + err.message);
+  }
+});
+
 $("loadslate").addEventListener("click", async () => {
   try {
-    const parsed = JSON.parse($("slatejson").value);
+    const raw = $("slatejson").value.trim();
+    if (!raw) throw new Error("no JSON to load — pick a file or paste");
+    const parsed = JSON.parse(raw);
     if (!parsed.games || !Array.isArray(parsed.games)) throw new Error("no games array");
     SLATE = parsed;
     fillGames();
