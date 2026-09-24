@@ -7,6 +7,27 @@ things in this order. Longer explanations live in `PROCEDURE.md`.
 
 ---
 
+## The checklist — tick these off, don't skip a git push
+
+```
+Week N cycle
+──────────────────────────────────────────────────────────────
+[ ] 1. Tue/Wed  · generated slate JSON, spot-checked players
+[ ] 2. Before Thu kickoff · logged every queue prop in one sitting
+[ ] 2. Before Thu kickoff · exported CSV from UI → predictions.csv
+[ ] 2. Before Thu kickoff · git commit + git push  ← WITHOUT THIS THE WEEK IS INVALID
+[ ] 3. ~1h before each game · captured DraftKings closing price in UI
+[ ] 3. After each game-day batch of closes · export CSV, git commit + push
+[ ] 4. Tue morning · python resolve.py --dry-run → then python resolve.py
+[ ] 4. Tue morning · git commit + git push
+[ ] 5. Any time after ~100 total rows · python score.py --plot calibration_wN.png --bootstrap 1000
+[ ] 5. Any time · git commit calibration_wN.png + push
+──────────────────────────────────────────────────────────────
+```
+
+Every stage ends with `git push`. If your terminal doesn't say
+`Your branch is up to date with 'origin/main'`, you're not done.
+
 ## Every week — five things, in this order
 
 ### 1. Tuesday/Wednesday · generate the slate
