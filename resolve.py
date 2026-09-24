@@ -38,11 +38,17 @@ def main():
     if not CSV.exists():
         raise SystemExit("no predictions.csv yet")
     df = pd.read_csv(CSV)
-    # an all-empty column reads as float64, which then refuses a string
-    for c in ("outcome", "resolved_at"):
-        df[c] = df[c].astype(object)
+    # all-empty columns read as float64, which then refuse strings
+    for c in ("outcome", "resolved_at", "actual"):
+        if c in df:
+            df[c] = df[c].astype(object)
+        else:
+            df[c] = ""
 
-    pending = df[df.outcome.isna() | (df.outcome == "")]
+    # skip rows are recorded but never scored; leave them alone
+    unresolved = df.outcome.isna() | (df.outcome == "")
+    not_skip = df.get("skip_reason", pd.Series([""] * len(df))).fillna("").eq("")
+    pending = df[unresolved & not_skip & df.my_p.notna()]
     if pending.empty:
         print("nothing pending")
         return
@@ -78,14 +84,15 @@ def main():
 
             actual = float(hit.iloc[0][col])
             line = float(r.line)
+            now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
             if actual == line:
                 print(f"  = push  {r.player:22s} {r.market:14s} "
                       f"{actual:g} = {line:g}  (dropped)")
                 pushes += 1
                 if not a.dry_run:
+                    df.loc[idx, "actual"] = actual
                     df.loc[idx, "outcome"] = "push"
-                    df.loc[idx, "resolved_at"] = dt.datetime.now(
-                        dt.timezone.utc).isoformat(timespec="seconds")
+                    df.loc[idx, "resolved_at"] = now
                 continue
 
             over = actual > line
@@ -96,9 +103,9 @@ def main():
                   f"{r.side:5s}  you said {float(r.my_p):.2f}")
             filled += 1
             if not a.dry_run:
+                df.loc[idx, "actual"] = actual
                 df.loc[idx, "outcome"] = outcome
-                df.loc[idx, "resolved_at"] = dt.datetime.now(
-                    dt.timezone.utc).isoformat(timespec="seconds")
+                df.loc[idx, "resolved_at"] = now
 
     if not a.dry_run:
         df.to_csv(CSV, index=False)

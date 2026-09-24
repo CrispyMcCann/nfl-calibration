@@ -1,0 +1,815 @@
+<title>Prediction Log</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    color-scheme: light;
+    --ground:#F6F5F1; --surface:#FFF; --surface-2:#EFEDE7;
+    --ink:#1B1D21; --ink-soft:#5C6068; --ink-faint:#8A8D93; --line:#E2E0D9;
+    --accent:#2B4C7E; --accent-soft:#E8EDF5;
+    --good:#2F6B4F; --good-bg:#E6EFE9;
+    --warn:#A6401F; --warn-bg:#F7E9E3;
+    --lock:#7A6326; --lock-bg:#F3EEDF;
+    --display:"Newsreader",Georgia,serif;
+    --body:"IBM Plex Sans",system-ui,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground:#15171A; --surface:#1D2024; --surface-2:#24282D;
+    --ink:#E9E7E2; --ink-soft:#A2A6AD; --ink-faint:#74787F; --line:#2E3238;
+    --accent:#8AAAD9; --accent-soft:#1E2A3D;
+    --good:#7FBF9A; --good-bg:#1A2D22;
+    --warn:#E08C6B; --warn-bg:#3A2319;
+    --lock:#D6BC77; --lock-bg:#2E2717;
+  }}
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground:#15171A; --surface:#1D2024; --surface-2:#24282D;
+    --ink:#E9E7E2; --ink-soft:#A2A6AD; --ink-faint:#74787F; --line:#2E3238;
+    --accent:#8AAAD9; --accent-soft:#1E2A3D;
+    --good:#7FBF9A; --good-bg:#1A2D22;
+    --warn:#E08C6B; --warn-bg:#3A2319;
+    --lock:#D6BC77; --lock-bg:#2E2717;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5}
+  .wrap{max-width:940px;margin:0 auto;padding-inline:20px;padding-block:36px 72px}
+  header{border-bottom:2px solid var(--ink);padding-bottom:16px;margin-bottom:24px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px}
+  h1{font-family:var(--display);font-weight:600;font-size:clamp(28px,5vw,38px);margin:0 0 8px;letter-spacing:-.01em}
+  .sub{color:var(--ink-soft);margin:0;font-size:15px;max-width:60ch}
+  h2{font-family:var(--display);font-size:20px;font-weight:600;margin:32px 0 4px}
+  .hint{color:var(--ink-soft);font-size:13.5px;margin:0 0 14px;max-width:66ch}
+
+  .card{background:var(--surface);border:1px solid var(--line);padding:18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+  label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--ink-soft)}
+  .lab{font-family:var(--mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-faint)}
+  input,select,textarea{
+    font-family:var(--body);font-size:14px;padding:7px 9px;width:100%;
+    background:var(--ground);color:var(--ink);border:1px solid var(--line);border-radius:2px}
+  input[type=number]{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  textarea{min-height:64px;resize:vertical;font-size:13.5px}
+  input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  button{
+    font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+    padding:8px 14px;cursor:pointer;background:var(--surface);color:var(--ink);
+    border:1px solid var(--line);border-radius:2px}
+  button:hover{border-color:var(--ink-faint)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+  button.primary:disabled{opacity:.4;cursor:not-allowed}
+  button.danger{color:var(--warn);border-color:var(--warn)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .row-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;align-items:center}
+
+  .step{border-left:3px solid var(--line);padding-left:14px;margin-top:18px}
+  .step.live{border-left-color:var(--accent)}
+  .step h3{font-family:var(--body);font-size:12px;font-weight:600;letter-spacing:.09em;
+    text-transform:uppercase;color:var(--ink-faint);margin:0 0 10px}
+  .step.live h3{color:var(--accent)}
+  .veil{opacity:.4;pointer-events:none}
+
+  .readout{font-family:var(--mono);font-size:13px;margin-top:14px;padding:10px 12px;
+    background:var(--surface-2);display:flex;gap:18px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+  .readout b{color:var(--accent);font-weight:500}
+  .readout .big{font-weight:500}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  .tw{overflow-x:auto;border-top:1px solid var(--line)}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--ink-faint);text-align:left;padding:9px 10px 9px 0;font-weight:500;white-space:nowrap}
+  td{padding:10px 10px 10px 0;border-top:1px solid var(--line);vertical-align:top}
+  td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  tr[data-locked="1"] td{color:var(--ink-soft)}
+  tr[data-kind="skip"] td{color:var(--ink-faint);font-style:italic}
+  .pill{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+    padding:2px 6px;border-radius:2px;white-space:nowrap}
+  .pill.open{color:var(--good);background:var(--good-bg)}
+  .pill.locked{color:var(--lock);background:var(--lock-bg)}
+  .pill.skip{color:var(--ink-faint);background:var(--surface-2)}
+  .pill.amended{color:var(--ink-soft);background:var(--surface-2);margin-left:5px}
+  .pill.control{color:var(--warn);background:var(--warn-bg)}
+  .pill.core{color:var(--good);background:var(--good-bg)}
+  .why{color:var(--ink-soft);font-size:12.5px;max-width:34ch}
+  .tiny{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:3px}
+  .acts{display:flex;gap:6px}
+  .acts button{padding:4px 8px;font-size:9.5px}
+
+  .note{font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin:12px 0 0;min-height:1.3em}
+  .empty{color:var(--ink-faint);font-size:13.5px;padding:22px 0}
+  details{margin-top:14px}
+  summary{cursor:pointer;font-family:var(--mono);font-size:10.5px;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--ink-faint)}
+  details textarea{margin-top:10px;min-height:90px;font-family:var(--mono);font-size:11px}
+  details.instructions{margin:0 0 24px;padding:14px 16px;background:var(--surface-2);border-left:3px solid var(--accent)}
+  details.instructions summary{color:var(--accent);font-size:11.5px}
+  details.instructions[open] summary{margin-bottom:10px}
+  details.instructions ol{margin:0;padding-left:20px;font-size:13.5px;color:var(--ink-soft)}
+  details.instructions li{margin:4px 0}
+  details.instructions code{font-family:var(--mono);font-size:12px;background:var(--surface);padding:1px 5px;border-radius:2px}
+  footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
+    font-size:13px;color:var(--ink-faint);max-width:68ch}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">NFL game-script calibration</p>
+    <h1>Prediction Log</h1>
+    <p class="sub">Your number goes in before the odds, and before kickoff. Rows stay editable until the game starts, then lock for good — every amendment is kept on the record.</p>
+  </header>
+
+  <details class="instructions" id="howto">
+    <summary>How to use this — read once, refer if you forget</summary>
+    <ol>
+      <li>Generate the week's slate: in the repo, <code>python slate.py --week N --json &gt; week_N.json</code>. Open the file, copy the whole thing.</li>
+      <li>Open <b>Load a week's slate</b> below, paste the JSON, hit <b>Load slate</b>, then <b>Work the queue</b>. This is the primary path — the manual form is a fallback.</li>
+      <li>For each prop, in order: fill <b>line</b>, pick <b>over/under</b> (the queue pre-selects the expected side), enter <b>your probability</b> as a decimal (0.61 not 61), write <b>why</b> in one sentence naming the mechanism. Only then do the odds fields wake up.</li>
+      <li>Enter DraftKings' American odds for both sides. Include the sign: <code>-115</code>, <code>+105</code>. The devigged market probability appears live under the fields.</li>
+      <li>Hit <b>Log &amp; next</b>. The queue advances automatically. Do the whole queue in one sitting so the information set stays constant.</li>
+      <li>If a prop should be skipped (player out, no line, book suspended), write the reason into the <b>why</b> field and hit <b>Skip this one</b>. The skip is recorded in the CSV with the reason attached.</li>
+      <li>When the queue is empty, hit <b>Copy all as CSV</b>, paste into <code>predictions.csv</code>, then <code>git add predictions.csv &amp;&amp; git commit -m "week N logged" &amp;&amp; git push</code>. The commit before kickoff is what makes the record evidence.</li>
+      <li>Shortly before each game's kickoff, use the row's <b>Close price</b> button to capture the closing DraftKings price. Commit again after each game-day batch of closes.</li>
+      <li>Tuesday morning: <code>python resolve.py</code> to fill outcomes from nflverse, then <code>python score.py --plot calibration_wN.png</code> to update the calibration curve. Commit both.</li>
+    </ol>
+  </details>
+
+  <h2>New prediction</h2>
+  <p class="hint">Paste this week's slate from <code>python slate.py --week N --json</code> to get the dropdowns, or just type the game and player in yourself.</p>
+
+  <div class="card" id="queuecard" hidden>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
+      <h3 style="font-family:var(--display);font-size:19px;font-weight:600;margin:0" id="qtitle"></h3>
+      <span class="note" id="qprog" style="margin:0"></span>
+    </div>
+    <div class="readout" id="qctx" style="margin-top:10px"></div>
+
+    <div class="step live" style="margin-top:16px">
+      <h3>Your number — before the odds</h3>
+      <div class="grid">
+        <label><span class="lab">Line</span><input type="number" id="qline" step="0.5" placeholder="4.5"></label>
+        <label><span class="lab">Over / under</span><select id="qou">
+          <option value="over">Over</option><option value="under">Under</option></select></label>
+        <label><span class="lab">Your probability (0–1)</span><input type="number" id="qmyp" step="0.01" min="0.01" max="0.99" placeholder="0.61"></label>
+      </div>
+      <label style="margin-top:12px"><span class="lab">Why — name the mechanism (also the skip reason)</span>
+        <textarea id="qwhy" placeholder="trails from Q2 on a 16.8 implied total; 20% target share, 78% snaps"></textarea></label>
+    </div>
+
+    <div class="step veil" id="qs2">
+      <h3>Now the odds</h3>
+      <div class="grid">
+        <label><span class="lab">American odds, your side</span><input type="number" id="qodds" step="5" placeholder="-115"></label>
+        <label><span class="lab">American odds, other side</span><input type="number" id="qopp" step="5" placeholder="-105"></label>
+      </div>
+      <div class="readout" id="qread"><span>fill both prices to see the devigged number</span></div>
+    </div>
+
+    <div class="row-btns">
+      <button type="button" class="primary" id="qlog">Log &amp; next</button>
+      <button type="button" id="qskip">Skip this one</button>
+      <button type="button" id="qexit">Leave the queue</button>
+      <span class="note" id="qnote"></span>
+    </div>
+  </div>
+
+  <div class="card" id="freecard">
+    <details id="slatebox">
+      <summary>Load a week's slate</summary>
+      <textarea id="slatejson" placeholder='paste the JSON from slate.py --json'></textarea>
+      <div class="row-btns">
+        <button type="button" id="loadslate">Load slate</button>
+        <button type="button" id="startqueue" hidden>Work the queue</button>
+        <span class="note" id="slatenote"></span>
+      </div>
+    </details>
+
+    <div class="step live" id="s1">
+      <h3>1 · What you're predicting</h3>
+      <div class="grid">
+        <label><span class="lab">Game</span><select id="game"></select></label>
+        <label><span class="lab">Side of mechanism</span><select id="side">
+          <option value="trailing">Trailing — receiving volume</option>
+          <option value="leading">Leading — rushing volume</option>
+        </select></label>
+        <label><span class="lab">Player</span><select id="player"></select></label>
+        <label><span class="lab">Position</span><select id="pos">
+          <option value="WR">WR</option><option value="RB">RB</option>
+          <option value="TE">TE</option><option value="QB">QB</option>
+        </select></label>
+        <label><span class="lab">Market</span><select id="market">
+          <option value="receptions">Receptions</option>
+          <option value="rush_attempts">Rush attempts</option>
+          <option value="targets">Targets</option>
+          <option value="receiving_yards">Receiving yards</option>
+          <option value="rushing_yards">Rushing yards</option>
+        </select></label>
+        <label><span class="lab">Line</span><input type="number" id="line" step="0.5" placeholder="4.5"></label>
+        <label><span class="lab">Over / under</span><select id="ou">
+          <option value="over">Over</option><option value="under">Under</option>
+        </select></label>
+      </div>
+      <div class="grid" id="manual" style="margin-top:12px">
+        <label><span class="lab">Game (if not loaded)</span><input id="gamemanual" placeholder="SEA @ WAS"></label>
+        <label><span class="lab">Player (if not listed)</span><input id="playermanual" placeholder="Terry McLaurin"></label>
+        <label><span class="lab">Kickoff</span><input type="datetime-local" id="kick"></label>
+      </div>
+    </div>
+
+    <div class="step" id="s2">
+      <h3>2 · Your number — before you open the odds</h3>
+      <div class="grid">
+        <label><span class="lab">Your probability (0–1)</span><input type="number" id="myp" step="0.01" min="0.01" max="0.99" placeholder="0.61"></label>
+      </div>
+      <label style="margin-top:12px"><span class="lab">Why — name the mechanism</span>
+        <textarea id="why" placeholder="WAS 30th defence, implied total 16.8, trailing from Q2; 20% target share over three games"></textarea></label>
+    </div>
+
+    <div class="step veil" id="s3">
+      <h3>3 · Now the odds</h3>
+      <div class="grid">
+        <label><span class="lab">American odds, your side</span><input type="number" id="odds" step="5" placeholder="-115"></label>
+        <label><span class="lab">American odds, other side</span><input type="number" id="oppodds" step="5" placeholder="-105"></label>
+      </div>
+      <div class="readout" id="readout"><span>fill both prices to see the devigged number</span></div>
+    </div>
+
+    <div class="row-btns">
+      <button type="button" class="primary" id="save">Log prediction</button>
+      <button type="button" id="clear">Clear</button>
+      <span class="note" id="formnote"></span>
+    </div>
+  </div>
+
+  <h2>Logged</h2>
+  <p class="hint">Edit or delete anything until kickoff. After that the row is frozen — that lock is the whole reason this record is worth showing anyone.</p>
+  <div class="row-btns" style="margin-bottom:12px">
+    <button type="button" id="copycsv">Copy all as CSV</button>
+    <span class="note" id="csvnote"></span>
+  </div>
+  <div class="tw"><table>
+    <thead><tr>
+      <th>Status</th><th>Game</th><th>Player</th><th>Market</th>
+      <th>You</th><th>Mkt</th><th>Edge</th><th>Why</th><th></th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+  <p class="empty" id="empty">Nothing logged yet.</p>
+  <p class="note" id="sync"></p>
+
+  <footer>
+    <p>Paste the CSV into <code>predictions.csv</code>, then run <code>python resolve.py</code> to fill outcomes from nflverse and <code>python score.py</code> to score them. Amended rows keep their original values in the history, so the edit is visible rather than silent. Skipped rows are recorded with the reason and excluded from scoring.</p>
+  </footer>
+</div>
+
+<script>
+let DB = null, SLATE = null, ROWS = [], EDIT = null;
+
+const $ = (id) => document.getElementById(id);
+const note = (el, t) => { $(el).textContent = t; };
+const nowISO = () => new Date().toISOString();
+
+function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
+function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
+
+/* ---------- slate ---------- */
+function fillGames() {
+  const g = $("game"); g.innerHTML = "";
+  if (!SLATE) { g.innerHTML = '<option value="">— no slate loaded —</option>'; fillPlayers(); return; }
+  for (const gm of SLATE.games) {
+    const o = document.createElement("option");
+    o.value = gm.game;
+    o.textContent = `${gm.game}  (trail ${gm.trailing} D${gm.trail_def_rank}, lead ${gm.leading} D${gm.lead_def_rank})`;
+    g.appendChild(o);
+  }
+  fillPlayers();
+}
+function currentGame() {
+  if (!SLATE) return null;
+  return SLATE.games.find((x) => x.game === $("game").value) || null;
+}
+function fillPlayers() {
+  const sel = $("player"); sel.innerHTML = "";
+  const gm = currentGame();
+  if (!gm) { sel.innerHTML = '<option value="">— type below —</option>'; return; }
+  const list = $("side").value === "trailing" ? gm.trailing_players : gm.leading_players;
+  if (!list || !list.length) { sel.innerHTML = '<option value="">— type below —</option>'; return; }
+  for (const p of list) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = `${p.name} — tgt ${p.tgt}, share ${(p.share*100).toFixed(0)}%, rec ${p.rec}, car ${p.car}, snaps ${(p.snap*100).toFixed(0)}%`;
+    o.dataset.pos = p.pos || "";
+    sel.appendChild(o);
+  }
+  const trailing = $("side").value === "trailing";
+  $("pos").value = trailing ? "WR" : "RB";
+  $("market").value = trailing ? "receptions" : "rush_attempts";
+}
+$("player").addEventListener("change", () => {
+  const sel = $("player").selectedOptions[0];
+  if (sel && sel.dataset.pos) $("pos").value = sel.dataset.pos;
+});
+
+$("loadslate").addEventListener("click", async () => {
+  try {
+    const parsed = JSON.parse($("slatejson").value);
+    if (!parsed.games || !Array.isArray(parsed.games)) throw new Error("no games array");
+    SLATE = parsed;
+    fillGames();
+    const nq = (parsed.queue || []).length;
+    $("startqueue").hidden = !nq;
+    note("slatenote", `loaded week ${parsed.week}, ${parsed.games.length} games`
+         + (nq ? `, ${nq} props queued` : ""));
+    $("slatebox").open = false;
+    if (DB) { try { await DB.doc("meta/slate").set({ json: JSON.stringify(parsed), at: Date.now() }); } catch (e) {} }
+  } catch (e) { note("slatenote", "could not parse that: " + e.message); }
+});
+$("game").addEventListener("change", fillPlayers);
+$("side").addEventListener("change", fillPlayers);
+
+/* ---------- step gating ---------- */
+function gate() {
+  const ready = $("line").value !== "" && $("myp").value !== "" && $("why").value.trim().length > 3;
+  $("s3").classList.toggle("veil", !ready);
+  $("s2").classList.toggle("live", !ready);
+  $("s3").classList.toggle("live", ready);
+  paintReadout();
+}
+["line", "myp", "why"].forEach((id) => $(id).addEventListener("input", gate));
+
+function paintReadout() {
+  const o = $("odds").value, p = $("oppodds").value, my = parseFloat($("myp").value);
+  if (o === "" || p === "" || isNaN(my)) {
+    $("readout").innerHTML = "<span>fill both prices to see the devigged number</span>";
+    return;
+  }
+  const mp = devig(o, p), edge = my - mp;
+  $("readout").innerHTML =
+    `<span>you <b class="big">${my.toFixed(3)}</b></span>` +
+    `<span>market <b class="big">${mp.toFixed(3)}</b></span>` +
+    `<span>edge <b class="big">${edge >= 0 ? "+" : ""}${edge.toFixed(3)}</b></span>` +
+    (Math.abs(edge) > 0.15 ? `<span style="color:var(--warn)">that is a large claim on a liquid market</span>` : "");
+}
+["odds", "oppodds"].forEach((id) => $(id).addEventListener("input", paintReadout));
+
+/* ---------- helpers shared by manual + queue ---------- */
+function tierFor(sideOfMech, market) {
+  if (sideOfMech === "trailing" && market === "receptions") return ["core_pass", "over"];
+  if (sideOfMech === "leading" && market === "rush_attempts") return ["core_rush", "over"];
+  if (sideOfMech === "leading" && market === "receptions") return ["control_pass", "under"];
+  if (sideOfMech === "trailing" && market === "rush_attempts") return ["control_rush", "under"];
+  return ["", ""];
+}
+
+/* ---------- manual save ---------- */
+function formValues() {
+  const gm = currentGame();
+  const game = ($("gamemanual").value.trim() || $("game").value || "").trim();
+  const player = ($("playermanual").value.trim() || $("player").value || "").trim();
+  const my_p = parseFloat($("myp").value);
+  const odds = parseFloat($("odds").value), opp = parseFloat($("oppodds").value);
+  const sideMech = $("side").value;
+  const market = $("market").value;
+  const [tier, expect] = tierFor(sideMech, market);
+  const kick = $("kick").value ? new Date($("kick").value).toISOString()
+             : (gm ? new Date(gm.date + "T18:00:00Z").toISOString() : "");
+  // team = trailing or leading depending on side_of_mechanism
+  const team = gm ? (sideMech === "trailing" ? gm.trailing : gm.leading) : "";
+  const isHome = gm ? game.split(" @ ")[1] === team : false;
+  return {
+    game, team, side_of_mechanism: sideMech, tier, expect,
+    player, position: $("pos").value, market,
+    line: parseFloat($("line").value), side: $("ou").value,
+    my_p, odds, opp_odds: opp,
+    market_p: Number(devig(odds, opp).toFixed(4)),
+    edge: Number((my_p - devig(odds, opp)).toFixed(4)),
+    why: $("why").value.trim(),
+    kickoff: kick,
+    week: SLATE ? SLATE.week : null,
+    season: SLATE ? SLATE.season : 2026,
+    game_date: gm ? gm.date : "",
+    weekday: gm ? gm.weekday : "",
+    spread: gm ? gm.spread : null,
+    total: gm ? gm.total : null,
+    deficit: gm ? gm.deficit : null,
+    def_gap: gm ? gm.def_gap : null,
+    implied_total: gm ? (isHome ? gm.imp_home : gm.imp_away) : null,
+    own_def_rank: gm ? (sideMech === "trailing" ? gm.trail_def_rank : gm.lead_def_rank) : null,
+    def_rank_opp: gm ? (sideMech === "trailing" ? gm.lead_def_rank : gm.trail_def_rank) : null,
+    roof: gm ? gm.roof : "",
+  };
+}
+
+function problems(v) {
+  const p = [];
+  if (!v.game) p.push("game");
+  if (!v.player) p.push("player");
+  if (isNaN(v.line)) p.push("line");
+  if (isNaN(v.my_p) || v.my_p <= 0 || v.my_p >= 1) p.push("probability between 0 and 1");
+  if (v.why.length < 4) p.push("reasoning");
+  if (isNaN(v.odds) || isNaN(v.opp_odds)) p.push("both prices");
+  if (!v.kickoff) p.push("kickoff time");
+  return p;
+}
+
+$("save").addEventListener("click", async () => {
+  const v = formValues();
+  const bad = problems(v);
+  if (bad.length) { note("formnote", "still need: " + bad.join(", ")); return; }
+  if (!DB) { note("formnote", "not connected — nothing was saved"); return; }
+
+  if (EDIT) {
+    const prev = ROWS.find((r) => r.id === EDIT);
+    if (prev && Date.now() >= new Date(prev.kickoff).getTime()) {
+      note("formnote", "that game has started — it can no longer be changed");
+      EDIT = null; return;
+    }
+    const hist = (prev.amendments || []).concat([{
+      at: nowISO(),
+      from: { my_p: prev.my_p, line: prev.line, side: prev.side,
+              market: prev.market, player: prev.player, why: prev.why },
+    }]);
+    await DB.doc("predictions/" + EDIT).set({ ...prev, ...v, amendments: hist, id: EDIT });
+    note("formnote", "amended — the previous values are kept in the history");
+    EDIT = null;
+    $("save").textContent = "Log prediction";
+  } else {
+    const id = Math.random().toString(36).slice(2, 12);
+    await DB.doc("predictions/" + id).set({
+      ...v, id, logged_at: nowISO(), outcome: "", amendments: [], skip_reason: "",
+    });
+    note("formnote", `logged — you ${v.my_p.toFixed(3)} vs market ${v.market_p.toFixed(3)}`);
+  }
+  clearForm(false);
+});
+
+function clearForm(msg = true) {
+  ["line", "myp", "why", "odds", "oppodds", "gamemanual", "playermanual"].forEach((id) => $(id).value = "");
+  EDIT = null;
+  $("save").textContent = "Log prediction";
+  gate();
+  if (msg) note("formnote", "");
+}
+$("clear").addEventListener("click", () => clearForm());
+
+/* ---------- table ---------- */
+function render() {
+  const tb = $("rows");
+  tb.innerHTML = "";
+  const sorted = [...ROWS].sort((a, b) => (b.logged_at || "").localeCompare(a.logged_at || ""));
+  $("empty").hidden = sorted.length > 0;
+
+  for (const r of sorted) {
+    const isSkip = !!r.skip_reason;
+    const locked = !r.kickoff || Date.now() >= new Date(r.kickoff).getTime();
+    const tr = document.createElement("tr");
+    tr.dataset.locked = locked ? "1" : "0";
+    if (isSkip) tr.dataset.kind = "skip";
+
+    const amended = (r.amendments || []).length;
+    const kickTxt = r.kickoff ? new Date(r.kickoff).toLocaleString([], {
+      weekday: "short", hour: "numeric", minute: "2-digit" }) : "—";
+    const pill = isSkip ? `<span class="pill skip">skip</span>`
+                        : `<span class="pill ${locked ? "locked" : "open"}">${locked ? "locked" : "open"}</span>`;
+
+    if (isSkip) {
+      tr.innerHTML =
+        `<td>${pill}<div class="tiny">${kickTxt}</div></td>` +
+        `<td>${esc(r.game)}<div class="tiny">${esc(r.side_of_mechanism || "")}</div></td>` +
+        `<td>${esc(r.player)}</td>` +
+        `<td>${esc(String(r.market).replace(/_/g, " "))}</td>` +
+        `<td class="num">—</td><td class="num">—</td><td class="num">—</td>` +
+        `<td class="why">${esc(r.skip_reason)}</td>` +
+        `<td><div class="acts"></div></td>`;
+    } else {
+      tr.innerHTML =
+        `<td>${pill}` +
+        (amended ? `<span class="pill amended">${amended} edit${amended > 1 ? "s" : ""}</span>` : "") +
+        `<div class="tiny">${kickTxt}</div></td>` +
+        `<td>${esc(r.game)}<div class="tiny">${esc(r.side_of_mechanism || "")}</div></td>` +
+        `<td>${esc(r.player)}</td>` +
+        `<td>${esc(r.side)} ${r.line} ${esc(String(r.market).replace(/_/g, " "))}</td>` +
+        `<td class="num">${Number(r.my_p).toFixed(3)}</td>` +
+        `<td class="num">${Number(r.market_p).toFixed(3)}</td>` +
+        `<td class="num" style="color:${r.edge >= 0 ? "var(--good)" : "var(--warn)"}">${r.edge >= 0 ? "+" : ""}${Number(r.edge).toFixed(3)}</td>` +
+        `<td class="why">${esc(r.why)}</td>` +
+        `<td><div class="acts"></div></td>`;
+    }
+
+    const acts = tr.querySelector(".acts");
+    if (!locked && !isSkip) {
+      const c = document.createElement("button");
+      c.textContent = r.market_p_close != null ? "Reprice" : "Close price";
+      c.title = "record the price just before kickoff; your forecast is untouched";
+      c.addEventListener("click", () => closePrice(r, tr));
+      acts.appendChild(c);
+      const e = document.createElement("button");
+      e.textContent = "Edit";
+      e.addEventListener("click", () => startEdit(r));
+      const d = document.createElement("button");
+      d.textContent = "Delete"; d.className = "danger";
+      d.addEventListener("click", () => remove(r));
+      acts.append(e, d);
+    } else if (isSkip) {
+      const d = document.createElement("button");
+      d.textContent = "Undo skip"; d.className = "danger";
+      d.addEventListener("click", () => remove(r));
+      acts.append(d);
+    }
+    tb.appendChild(tr);
+  }
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; }
+
+function startEdit(r) {
+  if (Date.now() >= new Date(r.kickoff).getTime()) { note("formnote", "that game has started"); return; }
+  EDIT = r.id;
+  $("gamemanual").value = r.game;
+  $("playermanual").value = r.player;
+  $("side").value = r.side_of_mechanism || "trailing";
+  $("pos").value = r.position || "WR";
+  $("market").value = r.market;
+  $("line").value = r.line;
+  $("ou").value = r.side;
+  $("myp").value = r.my_p;
+  $("why").value = r.why;
+  $("odds").value = r.odds;
+  $("oppodds").value = r.opp_odds;
+  if (r.kickoff) {
+    const d = new Date(r.kickoff);
+    $("kick").value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  }
+  $("save").textContent = "Save amendment";
+  note("formnote", "editing — the original values will be kept in the history");
+  gate();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function closePrice(r, tr) {
+  if (tr.querySelector(".closebox")) return;
+  const box = document.createElement("div");
+  box.className = "closebox";
+  box.style.cssText = "display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap";
+  box.innerHTML = `<input type="number" step="5" placeholder="close, your side" style="width:130px">
+                   <input type="number" step="5" placeholder="close, other side" style="width:130px">`;
+  const ok = document.createElement("button"); ok.textContent = "Save";
+  const no = document.createElement("button"); no.textContent = "Cancel";
+  box.append(ok, no);
+  tr.querySelector("td:last-child").appendChild(box);
+  const [a, b] = box.querySelectorAll("input");
+  no.addEventListener("click", () => box.remove());
+  ok.addEventListener("click", async () => {
+    const x = parseFloat(a.value), y = parseFloat(b.value);
+    if (isNaN(x) || isNaN(y)) { note("csvnote", "need both closing prices"); return; }
+    if (Date.now() >= new Date(r.kickoff).getTime()) {
+      note("csvnote", "that game has started"); box.remove(); return;
+    }
+    const mpc = devig(x, y);
+    await DB.doc("predictions/" + r.id).set({
+      ...r, close_odds: x, close_opp_odds: y,
+      market_p_close: Number(mpc.toFixed(4)),
+      edge_close: Number((r.my_p - mpc).toFixed(4)),
+      closed_at: nowISO(),
+    });
+    note("csvnote", `closing price saved — edge vs close ${(r.my_p - mpc >= 0 ? "+" : "")}${(r.my_p - mpc).toFixed(3)}`);
+    box.remove();
+  });
+}
+
+let pendingDelete = null;
+function remove(r) {
+  if (pendingDelete !== r.id) {
+    pendingDelete = r.id;
+    const label = r.skip_reason ? `skip on ${r.player}` : r.player;
+    note("csvnote", `press Delete again on ${label} to confirm`);
+    setTimeout(() => { if (pendingDelete === r.id) { pendingDelete = null; note("csvnote", ""); } }, 4000);
+    return;
+  }
+  pendingDelete = null;
+  note("csvnote", "");
+  if (DB) DB.doc("predictions/" + r.id).delete();
+}
+
+/* ---------- csv ---------- */
+// Must match SCHEMA.md exactly. 46 columns.
+const CSV_COLS = [
+  "id","logged_at","season","week","game_date","kickoff","weekday",
+  "game","team","side_of_mechanism","tier","expect",
+  "player","position","market","line","side",
+  "my_p","why",
+  "odds","opp_odds","market_p","edge",
+  "close_odds","close_opp_odds","market_p_close","edge_close","closed_at",
+  "own_def_rank","def_rank_opp","def_gap",
+  "implied_total","deficit","spread","total","roof","pace",
+  "base_tgt_share","base_rec","base_car","base_snap",
+  "skip_reason","amendments",
+  "actual","outcome","resolved_at",
+];
+
+$("copycsv").addEventListener("click", async () => {
+  if (!ROWS.length) { note("csvnote", "nothing to copy"); return; }
+  const q = (v) => {
+    if (v == null) return "";
+    const s = Array.isArray(v) || (typeof v === "object")
+      ? JSON.stringify(v) : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const body = ROWS.map((r) => CSV_COLS.map((c) => q(r[c])).join(","));
+  const csv = [CSV_COLS.join(","), ...body].join("\n");
+  try {
+    await navigator.clipboard.writeText(csv);
+    note("csvnote", `${ROWS.length} rows copied — paste into predictions.csv`);
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = csv; ta.style.cssText = "position:fixed;left:0;top:0;width:100%;height:50vh;z-index:9";
+    document.body.appendChild(ta); ta.select();
+    note("csvnote", "clipboard blocked — select the box and copy manually, then reload");
+  }
+});
+
+/* ---------- queue ---------- */
+let QI = 0;
+
+const qkey = (r) => [r.week, r.game, r.player, r.market].join("|");
+function doneKeys() {
+  const s = new Set();
+  for (const r of ROWS) s.add(qkey(r));
+  return s;
+}
+
+function remaining() {
+  if (!SLATE || !SLATE.queue) return [];
+  const done = doneKeys();
+  return SLATE.queue.filter((q) =>
+    !done.has([SLATE.week, q.game, q.player, q.market].join("|")));
+}
+
+function showQueue() {
+  const left = remaining();
+  const total = SLATE.queue.length;
+  if (!left.length) {
+    $("queuecard").hidden = true;
+    $("freecard").hidden = false;
+    note("slatenote", `queue complete — ${total} props for week ${SLATE.week}`);
+    return;
+  }
+  QI = Math.min(QI, left.length - 1);
+  const q = left[QI];
+  $("queuecard").hidden = false;
+  $("freecard").hidden = true;
+  $("qtitle").textContent = `${q.player} — ${String(q.market).replace(/_/g, " ")}`;
+  const isControl = String(q.tier || "").startsWith("control");
+  $("qprog").innerHTML = `${total - left.length + 1} of ${total} · ` +
+    `<span class="pill ${isControl ? "control" : "core"}">${q.tier}</span>` +
+    ` hypothesis says <b>${q.expect || "over"}</b>`;
+  $("qctx").innerHTML =
+    `<span>${esc(q.game)}</span>` +
+    `<span>${esc(q.team)} <b>${q.side_of_mechanism}</b></span>` +
+    `<span>own D <b>${q.own_def_rank}</b></span>` +
+    `<span>opp D <b>${q.def_rank_opp}</b></span>` +
+    `<span>gap <b>${q.def_gap}</b></span>` +
+    `<span>implied <b>${q.implied_total}</b></span>` +
+    `<span>spread <b>${q.spread > 0 ? "+" : ""}${q.spread}</b></span>` +
+    `<span>total <b>${q.total}</b></span>` +
+    `<span>pace <b>${q.pace}</b></span>` +
+    (q.base_tgt_share != null ? `<span>tgt share <b>${(q.base_tgt_share*100).toFixed(0)}%</b></span>` : "") +
+    (q.base_car ? `<span>car/g <b>${q.base_car}</b></span>` : "") +
+    (q.base_snap != null ? `<span>snaps <b>${(q.base_snap*100).toFixed(0)}%</b></span>` : "") +
+    `<span>${esc(q.roof)}</span>`;
+  $("qou").value = q.expect || "over";
+  ["qline", "qmyp", "qwhy", "qodds", "qopp"].forEach((id) => $(id).value = "");
+  qgate();
+  note("qnote", "");
+}
+
+function qgate() {
+  const ready = $("qline").value !== "" && $("qmyp").value !== "" && $("qwhy").value.trim().length > 3;
+  $("qs2").classList.toggle("veil", !ready);
+  const o = $("qodds").value, p = $("qopp").value, my = parseFloat($("qmyp").value);
+  if (o === "" || p === "" || isNaN(my)) {
+    $("qread").innerHTML = "<span>fill both prices to see the devigged number</span>";
+    return;
+  }
+  const mp = devig(o, p), e = my - mp;
+  $("qread").innerHTML =
+    `<span>you <b class="big">${my.toFixed(3)}</b></span><span>market <b class="big">${mp.toFixed(3)}</b></span>` +
+    `<span>edge <b class="big">${e >= 0 ? "+" : ""}${e.toFixed(3)}</b></span>` +
+    (Math.abs(e) > 0.15 ? `<span style="color:var(--warn)">large claim on a liquid market</span>` : "");
+}
+["qline", "qmyp", "qwhy", "qodds", "qopp"].forEach((id) =>
+  $(id).addEventListener("input", qgate));
+
+$("startqueue").addEventListener("click", () => { QI = 0; $("slatebox").open = false; showQueue(); });
+$("qexit").addEventListener("click", () => { $("queuecard").hidden = true; $("freecard").hidden = false; });
+
+$("qskip").addEventListener("click", async () => {
+  const left = remaining(); if (!left.length) return;
+  const q = left[QI];
+  const reason = ($("qwhy").value.trim() ||
+    prompt("Why are you skipping? (no line offered, player out, …)") || "").trim();
+  if (reason.length < 3) { note("qnote", "a skip needs a reason — it goes on the record"); return; }
+  if (!DB) { note("qnote", "not connected — nothing was saved"); return; }
+  const id = Math.random().toString(36).slice(2, 12);
+  await DB.doc("predictions/" + id).set({
+    id, logged_at: nowISO(),
+    season: SLATE.season, week: SLATE.week,
+    game_date: q.game_date, kickoff: q.kickoff, weekday: q.weekday,
+    game: q.game, team: q.team, side_of_mechanism: q.side_of_mechanism,
+    tier: q.tier, expect: q.expect,
+    player: q.player, position: q.position, market: q.market,
+    own_def_rank: q.own_def_rank, def_rank_opp: q.def_rank_opp,
+    def_gap: q.def_gap, implied_total: q.implied_total, deficit: q.deficit,
+    spread: q.spread, total: q.total, roof: q.roof, pace: q.pace,
+    base_tgt_share: q.base_tgt_share, base_rec: q.base_rec,
+    base_car: q.base_car, base_snap: q.base_snap,
+    skip_reason: reason,
+    outcome: "skip", amendments: [],
+  });
+  note("qnote", `skipped — ${reason}`);
+  QI = 0;
+  setTimeout(showQueue, 350);
+});
+
+$("qlog").addEventListener("click", async () => {
+  const left = remaining(); if (!left.length) return;
+  const q = left[QI];
+  const my_p = parseFloat($("qmyp").value);
+  const line = parseFloat($("qline").value);
+  const odds = parseFloat($("qodds").value), opp = parseFloat($("qopp").value);
+  const why = $("qwhy").value.trim();
+  if (isNaN(line) || isNaN(my_p) || my_p <= 0 || my_p >= 1 || why.length < 4
+      || isNaN(odds) || isNaN(opp)) {
+    note("qnote", "need line, a probability between 0 and 1, reasoning, and both prices");
+    return;
+  }
+  if (!DB) { note("qnote", "not connected — nothing was saved"); return; }
+  const mp = devig(odds, opp);
+  const id = Math.random().toString(36).slice(2, 12);
+  await DB.doc("predictions/" + id).set({
+    id, logged_at: nowISO(),
+    season: SLATE.season, week: SLATE.week,
+    game: q.game, game_date: q.game_date, kickoff: q.kickoff, weekday: q.weekday,
+    team: q.team, side_of_mechanism: q.side_of_mechanism,
+    tier: q.tier, expect: q.expect,
+    player: q.player, position: q.position,
+    market: q.market, line, side: $("qou").value,
+    my_p, odds, opp_odds: opp,
+    market_p: Number(mp.toFixed(4)), edge: Number((my_p - mp).toFixed(4)),
+    def_rank_opp: q.def_rank_opp, own_def_rank: q.own_def_rank,
+    def_gap: q.def_gap, deficit: q.deficit,
+    implied_total: q.implied_total, spread: q.spread, total: q.total,
+    pace: q.pace, base_tgt_share: q.base_tgt_share, base_rec: q.base_rec,
+    base_car: q.base_car, base_snap: q.base_snap,
+    roof: q.roof, why,
+    outcome: "", amendments: [], skip_reason: "",
+  });
+  note("qnote", `logged — edge ${(my_p - mp >= 0 ? "+" : "")}${(my_p - mp).toFixed(3)}`);
+  QI = 0;
+  setTimeout(showQueue, 350);
+});
+
+/* ---------- boot ---------- */
+fillGames();
+gate();
+render();
+
+(async () => {
+  if (!window.claude || !window.claude.use) { note("sync", "offline — nothing will be saved"); return; }
+  const db = await window.claude.use("db");
+  if (!db) { note("sync", "offline — nothing will be saved"); return; }
+  DB = db;
+  try {
+    db.collection("predictions").onSnapshot((docs) => {
+      const legacy = ROWS.filter((r) => String(r.id).startsWith("legacy_skip_"));
+      ROWS = docs.map((d) => ({ ...d, id: String(d.id || "").replace(/^predictions\//, "") })).concat(legacy);
+      render();
+      if (!$("queuecard").hidden && SLATE) showQueue();
+    });
+    // Legacy back-compat: fold any pre-migration `skips` collection docs
+    // into ROWS as skip-typed rows, so their reasons still export.
+    try {
+      db.collection("skips").onSnapshot((docs) => {
+        const legacy = docs.map((d) => ({
+          id: "legacy_skip_" + (d.id || Math.random().toString(36).slice(2)),
+          week: d.week, game: d.game, player: d.player, market: d.market,
+          skip_reason: d.reason || "legacy skip", outcome: "skip",
+          logged_at: d.at || "", amendments: [],
+        }));
+        ROWS = ROWS.filter((r) => !String(r.id).startsWith("legacy_skip_")).concat(legacy);
+        render();
+      });
+    } catch (e) {}
+    const meta = await db.doc("meta/slate").get();
+    if (meta && meta.json) {
+      try {
+        SLATE = JSON.parse(meta.json); fillGames();
+        $("startqueue").hidden = !(SLATE.queue || []).length;
+        note("slatenote", `week ${SLATE.week} slate restored`
+             + ((SLATE.queue || []).length ? `, ${remaining().length} props left` : ""));
+      } catch (e) {}
+    }
+    note("sync", "saved to this page — rows persist across devices");
+  } catch (e) { note("sync", "offline — nothing will be saved"); }
+})();
+
+setInterval(render, 60000);
+</script>

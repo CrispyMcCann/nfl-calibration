@@ -34,13 +34,13 @@ def load() -> pd.DataFrame:
         raise SystemExit("no predictions.csv yet — log some predictions first")
     df = pd.read_csv(CSV)
     df = df[df.outcome.notna() & (df.outcome != "")]
-    # pushes and did-not-plays have no outcome to score
-    skipped = df[df.outcome.astype(str).isin(["push", "dnp"])]
-    df = df[~df.outcome.astype(str).isin(["push", "dnp"])]
-    if len(skipped):
-        print(f"(excluded {len(skipped)} unscoreable rows: "
+    # push/dnp/skip carry no scoreable outcome
+    unscoreable = df[df.outcome.astype(str).isin(["push", "dnp", "skip"])]
+    df = df[~df.outcome.astype(str).isin(["push", "dnp", "skip"])]
+    if len(unscoreable):
+        print(f"(excluded {len(unscoreable)} unscoreable rows: "
               + ", ".join(f"{k} {v}" for k, v in
-                          skipped.outcome.value_counts().items()) + ")")
+                          unscoreable.outcome.value_counts().items()) + ")")
     if df.empty:
         raise SystemExit("no scoreable rows yet — run resolve.py")
     df["outcome"] = df.outcome.astype(float)
@@ -57,6 +57,37 @@ def calibration(df: pd.DataFrame, bins: int = 10) -> pd.DataFrame:
     )
     t["gap"] = t.actual - t.stated          # positive = you were underconfident
     return t
+
+
+def calibration_ci(df: pd.DataFrame, bins: int = 10, n_boot: int = 1000,
+                   seed: int = 0) -> pd.DataFrame:
+    """Cluster-bootstrapped 95% CI on decile observed frequencies.
+
+    Props within a game share a game script, so their outcomes are
+    correlated. A row-level bootstrap would understate the sampling
+    error. Resampling games (with replacement) treats each game as the
+    independent unit, which it is.
+
+    Returns the point-estimate calibration table plus lo/hi bounds on
+    the `actual` column.
+    """
+    point = calibration(df, bins)
+    if "game" not in df or df.game.nunique() < 2:
+        point["lo"] = np.nan
+        point["hi"] = np.nan
+        return point
+    rng = np.random.default_rng(seed)
+    games = df.game.unique()
+    boot = {b: [] for b in point.index}
+    for _ in range(n_boot):
+        pick = rng.choice(games, size=len(games), replace=True)
+        rows = pd.concat([df[df.game == g] for g in pick], ignore_index=True)
+        t = calibration(rows, bins)
+        for b in point.index:
+            boot[b].append(t.actual.get(b, np.nan))
+    point["lo"] = [np.nanpercentile(boot[b], 2.5) for b in point.index]
+    point["hi"] = [np.nanpercentile(boot[b], 97.5) for b in point.index]
+    return point
 
 
 def edge_test(df: pd.DataFrame) -> str:
@@ -85,6 +116,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-n", type=int, default=100)
     ap.add_argument("--plot", default=None)
+    ap.add_argument("--bootstrap", type=int, default=1000,
+                    help="number of game-clustered bootstrap resamples for "
+                         "calibration CIs; 0 skips")
     a = ap.parse_args()
 
     df = load()
@@ -106,8 +140,14 @@ def main():
     print(f"  brier market {brier(df.market_p, df.outcome):.4f}")
     print(f"  brier naive  {brier(np.full(n, base), df.outcome):.4f}")
 
-    print("\ncalibration (gap > 0 = underconfident, < 0 = overconfident)\n")
-    t = calibration(df)
+    print("\ncalibration (gap > 0 = underconfident, < 0 = overconfident)")
+    if a.bootstrap and n_games >= 2:
+        print(f"  [lo, hi] are 95% CIs from {a.bootstrap} game-clustered "
+              "bootstrap resamples\n")
+        t = calibration_ci(df, n_boot=a.bootstrap)
+    else:
+        print()
+        t = calibration(df)
     print(t.to_string(float_format=lambda v: f"{v:.3f}"))
 
     print("\nedge test")
@@ -142,10 +182,14 @@ def main():
         import matplotlib.pyplot as plt
         fig, ax = plt.subplots(figsize=(5, 5))
         ax.plot([0, 1], [0, 1], "--", lw=1, color="#8A8D93")
-        ax.plot(t.stated, t.actual, "o-", color="#2B4C7E")
+        if "lo" in t and t.lo.notna().any():
+            ax.fill_between(t.stated, t.lo, t.hi, alpha=0.15,
+                            color="#2B4C7E", label="95% CI (game-clustered)")
+        ax.plot(t.stated, t.actual, "o-", color="#2B4C7E", label="observed")
+        ax.legend(loc="lower right", frameon=False, fontsize=9)
         ax.set_xlabel("your stated probability")
         ax.set_ylabel("observed frequency")
-        ax.set_title(f"Calibration, n={n}")
+        ax.set_title(f"Calibration, n={n} rows, {n_games} games")
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
         fig.tight_layout(); fig.savefig(a.plot, dpi=150)
         print(f"\nwrote {a.plot}")

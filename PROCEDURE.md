@@ -1,9 +1,13 @@
 # PROCEDURE.md
 
 Step-by-step operating manual for the weekly cycle. `PREREGISTRATION.md`
-is the spec; `CLAUDE.md` names the invariants; this file names the
-button-presses. If a step here contradicts the preregistration, the
-preregistration wins.
+is the spec; `SCHEMA.md` is the column-level source of truth; `CLAUDE.md`
+names the invariants; this file names the button-presses. If a step
+here contradicts the preregistration, the preregistration wins.
+
+**Prediction Log UI:** https://claude.ai/code/artifact/b7a4cd06-950a-4e2f-a850-8412e3ef93ad
+The UI is the primary path for logging predictions each week; the CLI
+paths in `log.py` are a fallback for when the UI is unreachable.
 
 ---
 
@@ -182,8 +186,13 @@ that, running `score.py` is fine; adjusting anything based on it is not.
 
 ```bash
 python score.py
-python score.py --plot calibration_wN.png
+python score.py --plot calibration_wN.png --bootstrap 1000
+git add calibration_wN.png && git commit -m "week N calibration snapshot"
 ```
+
+Commit `calibration_wN.png` each week so the calibration curve has a
+timestamped snapshot per week; the arc of that image sequence is itself
+part of the research artifact.
 
 **Read the output in this order:**
 
@@ -206,6 +215,14 @@ python score.py --plot calibration_wN.png
    `|my_p − market_p|` on rushing vs receiving props. A materially
    smaller spread on receiving is evidence that the disclosed 2024–25
    backtest exposure moved you toward the price. Report either way.
+7. **Clustered bootstrap CIs** (from `--bootstrap N`, default 1000): the
+   `lo` and `hi` columns on the calibration table are 95% percentile
+   intervals from resampling *games* (not rows) with replacement. Four
+   props on one game share a script and can't be treated as independent,
+   so a row-level CI would be misleadingly tight. Read the interval as
+   "if the season replayed itself, this decile's observed frequency
+   would land in [lo, hi] roughly 95% of the time." Wide intervals early
+   in the season are honest, not a code bug.
 
 **Do not** change the filter, the prop set, or the analysis in response
 to what you read. Ideas for changes get written down as new

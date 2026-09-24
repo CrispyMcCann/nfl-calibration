@@ -15,11 +15,30 @@ import argparse, csv, datetime as dt, pathlib, uuid
 
 CSV = pathlib.Path(__file__).parent / "predictions.csv"
 
-FIELDS = ["id", "logged_at", "season", "week", "game_date", "game",
-          "player", "position", "market", "line", "side",
-          "my_p", "odds", "opp_odds", "market_p", "edge",
-          "def_rank_opp", "implied_total", "spread", "roof",
-          "why", "outcome", "resolved_at"]
+# Canonical schema. Must stay in sync with SCHEMA.md, slate.py's --json
+# queue stub, and the "Prediction Log" UI's CSV_COLS. Order matters.
+FIELDS = [
+    # identifiers & timing
+    "id", "logged_at", "season", "week", "game_date", "kickoff", "weekday",
+    # game & mechanism
+    "game", "team", "side_of_mechanism", "tier", "expect",
+    # player & market
+    "player", "position", "market", "line", "side",
+    # prediction
+    "my_p", "why",
+    # opening price
+    "odds", "opp_odds", "market_p", "edge",
+    # closing price (usually filled by the UI's Close price button)
+    "close_odds", "close_opp_odds", "market_p_close", "edge_close", "closed_at",
+    # controls (game context, from slate)
+    "own_def_rank", "def_rank_opp", "def_gap",
+    "implied_total", "deficit", "spread", "total", "roof", "pace",
+    "base_tgt_share", "base_rec", "base_car", "base_snap",
+    # skip & amendment audit
+    "skip_reason", "amendments",
+    # outcome (written only by resolve.py)
+    "actual", "outcome", "resolved_at",
+]
 
 
 def american_to_prob(odds: float) -> float:
@@ -116,19 +135,42 @@ def interactive(season: int, week: int) -> None:
     is_home = g.game.split(" @ ")[1] == team
     implied = g.imp_home if is_home else g.imp_away
     opp_rank = g.lead_def_rank if side[0] == "trailing" else g.trail_def_rank
+    own_rank = g.trail_def_rank if side[0] == "trailing" else g.lead_def_rank
+
+    tier_map = {("trailing", "receptions"): ("core_pass", "over"),
+                ("leading", "rush_attempts"): ("core_rush", "over"),
+                ("leading", "receptions"): ("control_pass", "under"),
+                ("trailing", "rush_attempts"): ("control_rush", "under")}
+    tier, expect = tier_map.get((side[0], mkt), ("", ""))
+
+    paces = D.pace(season, week - 1).to_dict()
+    base = player._asdict() if hasattr(player, "_asdict") else {}
 
     mp = devig(odds, opp)
     row = {
         "id": uuid.uuid4().hex[:10],
         "logged_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-        "season": season, "week": week, "game_date": g.date, "game": g.game,
+        "season": season, "week": week, "game_date": g.date,
+        "kickoff": g.kickoff, "weekday": g.weekday,
+        "game": g.game, "team": team, "side_of_mechanism": side[0],
+        "tier": tier, "expect": expect,
         "player": player.player_display_name, "position": pos,
         "market": mkt, "line": line, "side": sd,
-        "my_p": round(my_p, 4), "odds": odds, "opp_odds": opp,
+        "my_p": round(my_p, 4), "why": why,
+        "odds": odds, "opp_odds": opp,
         "market_p": round(mp, 4), "edge": round(my_p - mp, 4),
-        "def_rank_opp": opp_rank, "implied_total": implied,
-        "spread": g.spread, "roof": g.roof, "why": why,
-        "outcome": "", "resolved_at": "",
+        "close_odds": "", "close_opp_odds": "",
+        "market_p_close": "", "edge_close": "", "closed_at": "",
+        "own_def_rank": own_rank, "def_rank_opp": opp_rank,
+        "def_gap": g.def_gap, "implied_total": implied, "deficit": g.deficit,
+        "spread": g.spread, "total": g.total, "roof": g.roof,
+        "pace": round(float(paces.get(team, float("nan"))), 1),
+        "base_tgt_share": round(float(base.get("tgt_share", 0) or 0), 3),
+        "base_rec": round(float(base.get("rec", 0) or 0), 1),
+        "base_car": round(float(base.get("car", 0) or 0), 1),
+        "base_snap": round(float(base.get("snap_pct", 0) or 0), 2),
+        "skip_reason": "", "amendments": "",
+        "actual": "", "outcome": "", "resolved_at": "",
     }
     append(row)
     print(f"\n  logged {row['id']}   you {my_p:.3f}   market {mp:.3f}   "
@@ -182,18 +224,22 @@ def main():
         raise SystemExit("--my-p must be strictly between 0 and 1")
 
     mp = devig(a.odds, a.opp_odds)
-    row = {
+    # Flag-mode CLI is a fallback path; columns not passed as flags are
+    # left empty, and the UI is expected to be the primary writer that
+    # populates the full analytical context.
+    row = {f: "" for f in FIELDS}
+    row.update({
         "id": uuid.uuid4().hex[:10],
         "logged_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "season": a.season, "week": a.week, "game_date": a.game_date,
         "game": a.game, "player": a.player, "position": a.position,
         "market": a.market, "line": a.line, "side": a.side,
-        "my_p": round(a.my_p, 4), "odds": a.odds, "opp_odds": a.opp_odds,
+        "my_p": round(a.my_p, 4), "why": a.why,
+        "odds": a.odds, "opp_odds": a.opp_odds,
         "market_p": round(mp, 4), "edge": round(a.my_p - mp, 4),
         "def_rank_opp": a.def_rank_opp, "implied_total": a.implied_total,
-        "spread": a.spread, "roof": a.roof, "why": a.why,
-        "outcome": "", "resolved_at": "",
-    }
+        "spread": a.spread, "roof": a.roof,
+    })
     append(row)
     print(f"logged {row['id']}  you {a.my_p:.3f}  market {mp:.3f}  "
           f"edge {row['edge']:+.3f}")

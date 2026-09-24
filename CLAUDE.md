@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A preregistered forecasting log. The `README.md` explains the weekly loop; `PREREGISTRATION.md` fixes the hypotheses, selection rule, and analysis plan before any 2026 row is written. Read both before changing behavior — several design choices that look like awkwardness (interactive prompt order, append-only CSV, `--narrow` off by default) exist to protect the record and are not cleanup candidates.
+A preregistered forecasting log. The `README.md` explains the weekly loop; `PREREGISTRATION.md` fixes the hypotheses, selection rule, and analysis plan before any 2026 row is written; `SCHEMA.md` is the canonical column definition for `predictions.csv`; `PROCEDURE.md` names the button-presses. Read all of them before changing behavior — several design choices that look like awkwardness (interactive prompt order, append-only CSV, `--narrow` off by default) exist to protect the record and are not cleanup candidates.
+
+**Prediction Log UI:** https://claude.ai/code/artifact/b7a4cd06-950a-4e2f-a850-8412e3ef93ad — the primary weekly logging path. Its source is mirrored in `ui.html` at the repo root. If you edit either, update both.
 
 The git history itself is load-bearing evidence: a self-reported forecasting record is only credible because each `predictions.csv` mutation is timestamped by a commit that predates the games it references. Anything that rewrites history on this repo (rebase, amend of pushed commits, force-push) invalidates the artifact.
 
@@ -36,7 +38,7 @@ No test suite, no linter, no build. Every entry point is a script at the repo ro
 
 **The four-prop-per-game structure** (`slate.py --json` and the interactive logger) is fixed: two core props state the mechanism (trailing WR receptions over, leading RB carries over) and two control props state its mirror image (leading WR under, trailing RB under). The controls exist so a general bias toward overs cannot masquerade as insight. Do not drop the controls to "simplify."
 
-**Append-only CSV.** `log.py` only appends; `resolve.py` is the sole writer to existing rows, and touches only `outcome` and `resolved_at`. `my_p`, `why`, `odds`, `market_p`, `edge` freeze at log time. Never introduce a second writer to those columns. The `FIELDS` list in `log.py` is the schema of record.
+**Append-only CSV, canonical schema in `SCHEMA.md`.** `log.py` and the UI both append; `resolve.py` is the sole writer to existing rows, and touches only `actual`, `outcome`, `resolved_at`. All other columns (`my_p`, `why`, `odds`, `market_p`, `edge`, etc.) freeze at log time. Never introduce a second writer to those columns. Three places must stay in sync: `log.py`'s `FIELDS` list, `slate.py`'s `--json` queue stub, and the UI's `CSV_COLS` — SCHEMA.md is authoritative for all three.
 
 **Interactive prompt ordering is intentional.** `log.interactive()` asks for the user's probability and reasoning *before* revealing the odds field. That ordering prevents anchoring on the line and is the reason the interactive path exists — do not "streamline" it into a single form.
 
