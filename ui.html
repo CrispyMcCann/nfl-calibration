@@ -107,6 +107,14 @@
   details.instructions ol{margin:0;padding-left:20px;font-size:13.5px;color:var(--ink-soft)}
   details.instructions li{margin:4px 0}
   details.instructions code{font-family:var(--mono);font-size:12px;background:var(--surface);padding:1px 5px;border-radius:2px}
+  .loadcard{border:2px solid var(--accent);padding:20px}
+  .loadcard summary{color:var(--ink-soft)}
+  details.manualwrap{margin:24px 0 0;padding:14px 16px;background:var(--surface-2);border-left:3px solid var(--ink-faint)}
+  details.manualwrap summary{color:var(--warn);font-size:12px}
+  details.manualwrap[open] summary{margin-bottom:10px}
+  details.manualwrap .card{background:var(--surface);border:1px solid var(--line);padding:18px;margin-top:8px}
+  #startqueue{font-size:12.5px;padding:10px 18px}
+  #queuecard{border:2px solid var(--good);padding:22px}
   footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
     font-size:13px;color:var(--ink-faint);max-width:68ch}
 </style>
@@ -121,8 +129,8 @@
   <details class="instructions" id="howto">
     <summary>How to use this — read once, refer if you forget</summary>
     <ol>
-      <li>Generate the week's slate: in the repo, <code>python slate.py --week N --json &gt; week_N.json</code>. Open the file, copy the whole thing.</li>
-      <li>Open <b>Load a week's slate</b> below, paste the JSON, hit <b>Load slate</b>, then <b>Work the queue</b>. This is the primary path — the manual form is a fallback.</li>
+      <li>Generate the week's slate: in the repo, <code>python slate.py --week N --json &gt; week_N.json</code>.</li>
+      <li>In <b>Step 1</b> below, pick the <code>week_N.json</code> file, hit <b>Load slate</b>. The queue starts automatically. Manual entry is a fallback only.</li>
       <li>For each prop, in order: fill <b>line</b>, pick <b>over/under</b> (the queue pre-selects the expected side), enter <b>your probability</b> as a decimal (0.61 not 61), write <b>why</b> in one sentence naming the mechanism. Only then do the odds fields wake up.</li>
       <li>Enter DraftKings' American odds for both sides. Include the sign: <code>-115</code>, <code>+105</code>. The devigged market probability appears live under the fields.</li>
       <li>Hit <b>Log &amp; next</b>. The queue advances automatically. Do the whole queue in one sitting so the information set stays constant.</li>
@@ -133,8 +141,27 @@
     </ol>
   </details>
 
-  <h2>New prediction</h2>
-  <p class="hint">Paste this week's slate from <code>python slate.py --week N --json</code> to get the dropdowns, or just type the game and player in yourself.</p>
+  <h2>Step 1 · Load this week's slate</h2>
+  <p class="hint">Generate it with <code>python slate.py --week N --json &gt; week_N.json</code>, then pick the file below. This is the primary path — do not use manual entry unless the queue is broken.</p>
+
+  <div class="card loadcard" id="loadcard">
+    <div class="row-btns" style="margin-top:0;align-items:center">
+      <label style="flex-direction:row;align-items:center;gap:8px;font-size:12px;margin:0">
+        <span class="lab">Slate JSON file</span>
+        <input type="file" id="slatefile" accept=".json,application/json" style="width:auto">
+      </label>
+      <button type="button" class="primary" id="loadslate">Load slate</button>
+      <button type="button" class="primary" id="startqueue" hidden style="background:var(--good);border-color:var(--good)">▶  Work the queue</button>
+      <span class="note" id="slatenote" style="margin:0"></span>
+    </div>
+    <details style="margin-top:14px">
+      <summary>Or paste JSON directly (fallback)</summary>
+      <textarea id="slatejson" placeholder='paste the JSON from slate.py --json'></textarea>
+    </details>
+  </div>
+
+  <h2>Step 2 · Work the queue</h2>
+  <p class="hint" id="queuehint">Queue not started — load a slate above and hit <b>Work the queue</b>.</p>
 
   <div class="card" id="queuecard" hidden>
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
@@ -172,24 +199,10 @@
     </div>
   </div>
 
+  <details class="manualwrap" id="manualwrap">
+    <summary>Manual entry — fallback if the queue can't be used</summary>
+    <p class="hint" style="margin-top:10px">Only use this if the queue is broken. The queue is the pre-registered path; manual entry means you're picking players yourself, which introduces discretion the design tries to eliminate.</p>
   <div class="card" id="freecard">
-    <details id="slatebox">
-      <summary>Load a week's slate</summary>
-      <div class="row-btns" style="margin-top:10px">
-        <label style="flex-direction:row;align-items:center;gap:8px;font-size:12px">
-          <span class="lab">Pick file</span>
-          <input type="file" id="slatefile" accept=".json,application/json" style="width:auto">
-        </label>
-        <span class="note" style="margin:0">or paste below</span>
-      </div>
-      <textarea id="slatejson" placeholder='paste the JSON from slate.py --json'></textarea>
-      <div class="row-btns">
-        <button type="button" id="loadslate">Load slate</button>
-        <button type="button" id="startqueue" hidden>Work the queue</button>
-        <span class="note" id="slatenote"></span>
-      </div>
-    </details>
-
     <div class="step live" id="s1">
       <h3>1 · What you're predicting</h3>
       <div class="grid">
@@ -246,8 +259,9 @@
       <span class="note" id="formnote"></span>
     </div>
   </div>
+  </details>
 
-  <h2>Logged</h2>
+  <h2>Step 3 · Everything you've logged</h2>
   <p class="hint">Edit or delete anything until kickoff. After that the row is frozen — that lock is the whole reason this record is worth showing anyone.</p>
   <div class="row-btns" style="margin-bottom:12px">
     <button type="button" id="copycsv">Copy all as CSV</button>
@@ -339,9 +353,11 @@ $("loadslate").addEventListener("click", async () => {
     const nq = (parsed.queue || []).length;
     $("startqueue").hidden = !nq;
     note("slatenote", `loaded week ${parsed.week}, ${parsed.games.length} games`
-         + (nq ? `, ${nq} props queued` : ""));
-    $("slatebox").open = false;
+         + (nq ? `, ${nq} props queued — starting queue…` : ""));
     if (DB) { try { await DB.doc("meta/slate").set({ json: JSON.stringify(parsed), at: Date.now() }); } catch (e) {} }
+    // Auto-start the queue if there are props to work; otherwise leave
+    // the manual entry available.
+    if (nq) setTimeout(() => { QI = 0; showQueue(); }, 300);
   } catch (e) { note("slatenote", "could not parse that: " + e.message); }
 });
 $("game").addEventListener("change", fillPlayers);
@@ -669,14 +685,14 @@ function showQueue() {
   const total = SLATE.queue.length;
   if (!left.length) {
     $("queuecard").hidden = true;
-    $("freecard").hidden = false;
+    $("queuehint").innerHTML = `<b style="color:var(--good)">Queue complete — ${total} props for week ${SLATE.week}.</b> Scroll to Step 3, hit <b>Copy all as CSV</b>, paste into <code>predictions.csv</code>, and commit + push.`;
     note("slatenote", `queue complete — ${total} props for week ${SLATE.week}`);
     return;
   }
   QI = Math.min(QI, left.length - 1);
   const q = left[QI];
   $("queuecard").hidden = false;
-  $("freecard").hidden = true;
+  $("queuehint").innerHTML = `<b style="color:var(--good)">Queue active — ${total - left.length + 1} of ${total}.</b> Fill line, over/under, your probability, and why. Odds fields wake up after.`;
   $("qtitle").textContent = `${q.player} — ${String(q.market).replace(/_/g, " ")}`;
   const isControl = String(q.tier || "").startsWith("control");
   $("qprog").innerHTML = `${total - left.length + 1} of ${total} · ` +
@@ -719,8 +735,11 @@ function qgate() {
 ["qline", "qmyp", "qwhy", "qodds", "qopp"].forEach((id) =>
   $(id).addEventListener("input", qgate));
 
-$("startqueue").addEventListener("click", () => { QI = 0; $("slatebox").open = false; showQueue(); });
-$("qexit").addEventListener("click", () => { $("queuecard").hidden = true; $("freecard").hidden = false; });
+$("startqueue").addEventListener("click", () => { QI = 0; showQueue(); });
+$("qexit").addEventListener("click", () => {
+  $("queuecard").hidden = true;
+  $("queuehint").innerHTML = "Queue paused. Hit <b>Work the queue</b> above to resume, or use manual entry below (only if the queue is broken).";
+});
 
 $("qskip").addEventListener("click", async () => {
   const left = remaining(); if (!left.length) return;
