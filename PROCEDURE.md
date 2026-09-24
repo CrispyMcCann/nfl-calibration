@@ -271,6 +271,16 @@ pre-registrations for next season.
 - **DraftKings unpriced or suspended.** Skip the prop with a written
   reason. Do not substitute another book — the preregistration names
   DraftKings.
+- **Weeks with a qualifying Thursday game AND some weekend lines not
+  yet posted.** The one-sitting rule wins. Log everything before
+  Thursday kickoff; skip any prop whose line is not yet posted with
+  reason `"no line posted at TNF-lockdown time"`. Do not log those
+  props after TNF plays — post-TNF information (injuries, weather,
+  market reaction) contaminates them relative to the props you already
+  logged. On weeks with no qualifying Thursday game (like Week 3
+  2026), the deadline slides to Sunday morning; wait until Saturday
+  when weekend lines are more likely posted, and log the whole slate
+  in one sitting then.
 - **Player ruled out between logging and kickoff.** The prediction
   stands as logged. Real-world exposure is part of the record; hedging
   it moves the log from evidence to reconstruction. `resolve.py` will
