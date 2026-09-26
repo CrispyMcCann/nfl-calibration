@@ -131,7 +131,7 @@
     <ol>
       <li>Generate the week's slate: in the repo, <code>python slate.py --week N --json &gt; week_N.json</code>.</li>
       <li>In <b>Step 1</b> below, pick the <code>week_N.json</code> file, hit <b>Load slate</b>. The queue starts automatically. Manual entry is a fallback only.</li>
-      <li>For each prop, in order: fill <b>line</b>, pick <b>over/under</b> (the queue pre-selects the expected side), enter <b>your probability</b> as a decimal (0.61 not 61), write <b>why</b> in one sentence naming the mechanism. Only then do the odds fields wake up.</li>
+      <li>For each prop, in order: fill <b>line</b>, the <b>over/under</b> is locked to the side the queue assigned (over on core, under on control), so enter <b>your probability that that side hits</b> as a decimal (0.61 not 61), write <b>why</b> in one sentence naming the mechanism. Only then do the odds fields wake up.</li>
       <li>Enter DraftKings' American odds for both sides. Include the sign: <code>-115</code>, <code>+105</code>. The devigged market probability appears live under the fields.</li>
       <li>Hit <b>Log &amp; next</b>. The queue advances automatically. Do the whole queue in one sitting so the information set stays constant.</li>
       <li>If a prop should be skipped (player out, no line, book suspended), write the reason into the <b>why</b> field and hit <b>Skip this one</b>. The skip is recorded in the CSV with the reason attached.</li>
@@ -174,7 +174,7 @@
       <h3>Your number — before the odds</h3>
       <div class="grid">
         <label><span class="lab">Line</span><input type="number" id="qline" step="0.5" placeholder="4.5"></label>
-        <label><span class="lab">Over / under</span><select id="qou">
+        <label><span class="lab">Over / under · set by the queue</span><select id="qou" disabled title="Locked to the queued side. Enter your probability that this side hits.">
           <option value="over">Over</option><option value="under">Under</option></select></label>
         <label><span class="lab">Your probability (0–1)</span><input type="number" id="qmyp" step="0.01" min="0.01" max="0.99" placeholder="0.61"></label>
       </div>
@@ -224,7 +224,7 @@
           <option value="rushing_yards">Rushing yards</option>
         </select></label>
         <label><span class="lab">Line</span><input type="number" id="line" step="0.5" placeholder="4.5"></label>
-        <label><span class="lab">Over / under</span><select id="ou">
+        <label><span class="lab">Over / under</span><select id="ou" disabled title="Set by side of mechanism and market">
           <option value="over">Over</option><option value="under">Under</option>
         </select></label>
       </div>
@@ -324,7 +324,17 @@ function fillPlayers() {
   const trailing = $("side").value === "trailing";
   $("pos").value = trailing ? "WR" : "RB";
   $("market").value = trailing ? "receptions" : "rush_attempts";
+  syncOU();
 }
+// The predicted side follows from side-of-mechanism + market (core = over,
+// control = under). Lock it whenever that pair defines one.
+function syncOU() {
+  const expect = tierFor($("side").value, $("market").value)[1];
+  if (expect) $("ou").value = expect;
+  $("ou").disabled = !!expect;
+}
+$("market").addEventListener("change", syncOU);
+$("side").addEventListener("change", syncOU);
 $("player").addEventListener("change", () => {
   const sel = $("player").selectedOptions[0];
   if (sel && sel.dataset.pos) $("pos").value = sel.dataset.pos;
@@ -415,7 +425,7 @@ function formValues() {
   return {
     game, team, side_of_mechanism: sideMech, tier, expect,
     player, position: $("pos").value, market,
-    line: parseFloat($("line").value), side: $("ou").value,
+    line: parseFloat($("line").value), side: expect || $("ou").value,
     my_p, odds, opp_odds: opp,
     market_p: Number(devig(odds, opp).toFixed(4)),
     edge: Number((my_p - devig(odds, opp)).toFixed(4)),
@@ -567,6 +577,7 @@ function startEdit(r) {
   $("market").value = r.market;
   $("line").value = r.line;
   $("ou").value = r.side;
+  syncOU();
   $("myp").value = r.my_p;
   $("why").value = r.why;
   $("odds").value = r.odds;
@@ -791,7 +802,7 @@ $("qlog").addEventListener("click", async () => {
     team: q.team, side_of_mechanism: q.side_of_mechanism,
     tier: q.tier, expect: q.expect,
     player: q.player, position: q.position,
-    market: q.market, line, side: $("qou").value,
+    market: q.market, line, side: q.expect,
     my_p, odds, opp_odds: opp,
     market_p: Number(mp.toFixed(4)), edge: Number((my_p - mp).toFixed(4)),
     def_rank_opp: q.def_rank_opp, own_def_rank: q.own_def_rank,
@@ -809,6 +820,7 @@ $("qlog").addEventListener("click", async () => {
 
 /* ---------- boot ---------- */
 fillGames();
+syncOU();
 gate();
 render();
 
