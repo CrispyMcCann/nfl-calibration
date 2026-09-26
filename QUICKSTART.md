@@ -16,7 +16,7 @@ Week N cycle
 [ ] 2. Before Thu kickoff · logged every queue prop in one sitting
 [ ] 2. Before Thu kickoff · exported CSV from UI → predictions.csv
 [ ] 2. Before Thu kickoff · git commit + git push  ← WITHOUT THIS THE WEEK IS INVALID
-[ ] 3. ~1h before each game · captured DraftKings closing price in UI
+[ ] 3. ~1h before each game · captured Fliff closing price in UI
 [ ] 3. After each game-day batch of closes · export CSV, git commit + push
 [ ] 4. Tue morning · python resolve.py --dry-run → then python resolve.py
 [ ] 4. Tue morning · git commit + git push
@@ -44,13 +44,13 @@ python slate.py --week N --detail | less   # look it over
 - Open **Load a week's slate**, paste the contents of `week_N.json`,
   hit **Load slate**, then **Work the queue**.
 - For each prop the queue hands you:
-  - **line** — the DraftKings number (e.g. `4.5`)
+  - **line** — the Fliff number (e.g. `4.5`)
   - **over/under** — pre-selected by the queue to match the hypothesis
   - **your probability** — decimal, 0–1 (e.g. `0.61`), before you look
     at the price
   - **why** — one sentence naming the mechanism
-  - **odds** — DraftKings American, your side, with sign (`-115`)
-  - **opp odds** — DraftKings American, other side (`-105`)
+  - **odds** — Fliff American, your side, with sign (`-115`)
+  - **opp odds** — Fliff American, other side (`-105`)
   - hit **Log & next**
 - To skip: write the reason in **why**, hit **Skip this one**
 - When the queue empties, hit **Copy all as CSV**, paste into
@@ -69,7 +69,7 @@ message.
 ### 3. ~1 hour before each game · closing price
 
 - Open the UI, find each row for a game about to start.
-- Hit **Close price**, enter both DraftKings prices at that moment.
+- Hit **Close price**, enter both Fliff prices at that moment.
 - After every game-day batch:
 
 ```bash

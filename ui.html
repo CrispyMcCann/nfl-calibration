@@ -132,11 +132,11 @@
       <li>Generate the week's slate: in the repo, <code>python slate.py --week N --json &gt; week_N.json</code>.</li>
       <li>In <b>Step 1</b> below, pick the <code>week_N.json</code> file, hit <b>Load slate</b>. The queue starts automatically. Manual entry is a fallback only.</li>
       <li>For each prop, in order: fill <b>line</b>, the <b>over/under</b> is locked to the side the queue assigned (over on core, under on control), so enter <b>your probability that that side hits</b> as a decimal (0.61 not 61), write <b>why</b> in one sentence naming the mechanism. Only then do the odds fields wake up.</li>
-      <li>Enter DraftKings' American odds for both sides. Include the sign: <code>-115</code>, <code>+105</code>. The devigged market probability appears live under the fields.</li>
+      <li>Enter Fliff's American odds for both sides. Include the sign: <code>-115</code>, <code>+105</code>. The devigged market probability appears live under the fields.</li>
       <li>Hit <b>Log &amp; next</b>. The queue advances automatically. Do the whole queue in one sitting so the information set stays constant.</li>
       <li>If a prop should be skipped (player out, no line, book suspended), write the reason into the <b>why</b> field and hit <b>Skip this one</b>. The skip is recorded in the CSV with the reason attached.</li>
       <li>When the queue is empty, hit <b>Copy all as CSV</b>, paste into <code>predictions.csv</code>, then <code>git add predictions.csv &amp;&amp; git commit -m "week N logged" &amp;&amp; git push</code>. The commit before kickoff is what makes the record evidence.</li>
-      <li>Shortly before each game's kickoff, use the row's <b>Close price</b> button to capture the closing DraftKings price. Commit again after each game-day batch of closes.</li>
+      <li>Shortly before each game's kickoff, use the row's <b>Close price</b> button to capture the closing Fliff price. Commit again after each game-day batch of closes.</li>
       <li>Tuesday morning: <code>python resolve.py</code> to fill outcomes from nflverse, then <code>python score.py --plot calibration_wN.png</code> to update the calibration curve. Commit both.</li>
     </ol>
   </details>

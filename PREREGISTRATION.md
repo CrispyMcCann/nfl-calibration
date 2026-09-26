@@ -86,7 +86,8 @@ because finding it prospectively is the point.
 
 ## H5 — the tradeable claim
 
-> Conditional on the DraftKings devigged price, my stated probability adds
+> Conditional on the Fliff devigged price (DraftKings in the original
+> registration — see Amendment 1), my stated probability adds
 > information: in a logistic regression of outcome on `[market_p, edge]`,
 > the coefficient on `edge` is positive.
 
@@ -120,7 +121,8 @@ receptions (under).
 tool does not reveal the price fields until the probability and the
 reasoning are entered.
 
-**Prices.** DraftKings only, devigged by normalising both sides. Recorded
+**Prices.** Fliff only (originally DraftKings — changed by Amendment 1,
+before any prediction was logged), devigged by normalising both sides. Recorded
 at the moment of prediction; the closing price recorded separately before
 each game's own kickoff.
 
@@ -165,3 +167,34 @@ The order matters. The mechanism was reasoned out before any data was
 examined; the prospective test comes next; the backtest is a replication of
 that test, not its source. Doing it the other way round means confirming a
 hypothesis that the same data produced.
+
+---
+
+## Amendments
+
+Each amendment is committed and pushed before any row it affects is
+logged. The commit timestamp is the evidence of that ordering.
+
+### Amendment 1 — price source: DraftKings → Fliff (2026-09-26)
+
+**Change.** All prices — opening (`odds`, `opp_odds`) and closing
+(`close_odds`, `close_opp_odds`) — come from Fliff instead of DraftKings,
+from week 3 (the first logged week) onward. H5 and every market-relative
+analysis use the Fliff devigged price.
+
+**Reason.** At week 3 logging time DraftKings offered rush-attempt props
+only as one-sided milestone prices ("14+ attempts") with no over/under
+pair, so they cannot be devigged. Skipping them would drop every rush prop
+— half of each week's queue — and with it the rush-vs-pass and
+core-vs-control comparisons. Fliff offers two-sided over/under prices on
+every prop in the queue. One book is used for everything; books are not
+mixed.
+
+**Timing.** Made before any prediction was logged. Nothing about the
+selection rule, prop set, probabilities, or analysis plan changes.
+
+**Known cost.** Fliff is a sweepstakes book and is likely less efficient
+than DraftKings. H5 is therefore tested against a weaker market than
+originally registered, and the closing-line comparison may carry less
+information if Fliff's lines move little before kickoff. The write-up
+states this; a positive edge coefficient is read with that caveat.
