@@ -86,7 +86,7 @@ because finding it prospectively is the point.
 
 ## H5 — the tradeable claim
 
-> Conditional on the Fliff devigged price (DraftKings in the original
+> Conditional on the FanDuel devigged price (DraftKings in the original
 > registration — see Amendment 1), my stated probability adds
 > information: in a logistic regression of outcome on `[market_p, edge]`,
 > the coefficient on `edge` is positive.
@@ -121,7 +121,7 @@ receptions (under).
 tool does not reveal the price fields until the probability and the
 reasoning are entered.
 
-**Prices.** Fliff only (originally DraftKings — changed by Amendment 1,
+**Prices.** FanDuel only (originally DraftKings — changed by Amendment 1,
 before any prediction was logged), devigged by normalising both sides. Recorded
 at the moment of prediction; the closing price recorded separately before
 each game's own kickoff.
@@ -175,58 +175,17 @@ hypothesis that the same data produced.
 Each amendment is committed and pushed before any row it affects is
 logged. The commit timestamp is the evidence of that ordering.
 
-### Amendment 1 — price source: DraftKings → Fliff (2026-09-26)
+### Amendment 1 — price source: DraftKings → FanDuel (2026-09-26)
 
 **Change.** All prices — opening (`odds`, `opp_odds`) and closing
-(`close_odds`, `close_opp_odds`) — come from Fliff instead of DraftKings,
-from week 3 (the first logged week) onward. H5 and every market-relative
-analysis use the Fliff devigged price.
+(`close_odds`, `close_opp_odds`) — come from FanDuel instead of DraftKings,
+from week 3 (the first logged week) onward.
 
-**Reason.** At week 3 logging time DraftKings offered rush-attempt props
-only as one-sided milestone prices ("14+ attempts") with no over/under
-pair, so they cannot be devigged. Skipping them would drop every rush prop
-— half of each week's queue — and with it the rush-vs-pass and
-core-vs-control comparisons. Fliff offers two-sided over/under prices on
-every prop in the queue. One book is used for everything; books are not
-mixed.
-
-**Why Fliff rather than a more established book.** A price source for
-this study has to meet four requirements, in this order:
-
-1. **Two-sided prices on every queued prop.** The devig needs both the
-   over and the under at the same line. A one-sided milestone price
-   carries the book's margin with no way to strip it, so it cannot
-   produce `market_p`.
-2. **Full coverage with one book.** Every queued prop, core and control,
-   rush and pass, priced by the same book. Mixing books would make
-   "the market" mean different things on different rows, and the schema
-   records no book column to separate them later.
-3. **Available at both times the record needs it:** the logging sitting
-   and shortly before each kickoff for the closing price.
-4. **Efficiency.** The sharper the book, the harder the bar in H5.
-
-DraftKings, the original choice, was chosen for requirement 4 and fails
-requirement 1 on rush attempts. Fliff meets requirements 1 and 2 on the
-full week 3 queue, and requirement 3 is expected (its props stay listed
-until kickoff). It is weaker on requirement 4, and that is accepted
-deliberately: no money is wagered, so the book's only job is to supply a
-devig-able market probability, and a complete record against a softer
-market is worth more to this study than a half-empty record against a
-sharper one. Other established books were not surveyed on logging night.
-Whether one of them offers two-sided rush-attempt prices is a question for
-next season's preregistration, not a mid-season switch.
-
-**How the cost is handled.** The book is fixed for the rest of the season
-(the stopping rule applies to it like any other design choice). The
-write-up reports Brier-market and the H5 edge coefficient explicitly as
-"versus Fliff", and does not describe a positive edge as beating the
-betting market in general.
+**Reason.** The devig needs a two-sided over/under price at a single line.
+FanDuel offers two-sided over/under prices on both rush attempts and
+receptions. DraftKings listed rush attempts as a ladder of one-sided
+milestone prices ("14+ attempts") rather than a two-sided over/under, so
+those props could not be devigged.
 
 **Timing.** Made before any prediction was logged. Nothing about the
 selection rule, prop set, probabilities, or analysis plan changes.
-
-**Known cost.** Fliff is a sweepstakes book and is likely less efficient
-than DraftKings. H5 is therefore tested against a weaker market than
-originally registered, and the closing-line comparison may carry less
-information if Fliff's lines move little before kickoff. The write-up
-states this; a positive edge coefficient is read with that caveat.

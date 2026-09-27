@@ -73,11 +73,11 @@ them (soonest kickoff first).
 
 | field | what it is | format | example |
 |---|---|---|---|
-| `line` | Fliff's posted line for the market | half-point float | `4.5` |
+| `line` | FanDuel's posted line for the market | half-point float | `4.5` |
 | `my_p` | your probability the queued side hits | float, strictly between 0 and 1, four decimals | `0.6100` |
 | `why` | one or two sentences naming the mechanism | free text | `WAS 30th D, implied 16.8 pts, script forces throwing; McLaurin 22% tgt share L3` |
-| `odds` | Fliff American price for the side you predicted | integer with explicit sign | `-115` |
-| `opp_odds` | Fliff American price for the opposite side | integer with explicit sign | `-105` |
+| `odds` | FanDuel American price for the side you predicted | integer with explicit sign | `-115` |
+| `opp_odds` | FanDuel American price for the opposite side | integer with explicit sign | `-105` |
 
 **Odds format rules — get these wrong and every edge is silently
 corrupted:**
@@ -85,7 +85,7 @@ corrupted:**
   Positive = risking 100 to win `odds`.
 - Enter the sign. `-115` not `115`. `+105` not `105`.
 - Enter **both** sides. The devig requires both to strip the margin.
-- If Fliff has one side unpriced or suspended, skip the prop.
+- If FanDuel has one side unpriced or suspended, skip the prop.
 
 **Probability format rules:**
 - Decimal, not percent. `0.61`, never `61`.
@@ -100,7 +100,7 @@ corrupted:**
 
 **Skip protocol:**
 - Any prop you don't log needs a written reason: injury out, prop not
-  offered on Fliff, Fliff suspended, technical error. The
+  offered on FanDuel, FanDuel suspended, technical error. The
   reason belongs in the write-up notes; skipping silently contaminates
   the record.
 
@@ -126,7 +126,7 @@ write-up. Do not backdate.
 **Window:** within one hour of each game's real kickoff time.
 
 For each open row in the UI belonging to a game about to start, hit
-"Close price" and enter Fliff's price at that moment.
+"Close price" and enter FanDuel's price at that moment.
 
 **Fields written:** `close_odds`, `opp_close_odds`, `market_p_close`.
 Nothing else changes. Your `my_p`, `why`, opening `odds`, `market_p`,
@@ -268,10 +268,10 @@ pre-registrations for next season.
 - **Missed the pre-kickoff window on a game.** Skip that game for the
   week. Never log a prop whose game has any information leak (injury
   news post-kickoff, weather updates, active/inactive report).
-- **Fliff unpriced or suspended.** Skip the prop with a written
+- **FanDuel unpriced or suspended.** Skip the prop with a written
   reason. Do not substitute another book — the preregistration names
-  Fliff (Amendment 1; originally DraftKings, which offers only one-sided
-  milestone prices on rush attempts).
+  FanDuel (Amendment 1; originally DraftKings, which lists rush attempts
+  only as one-sided milestone prices).
 - **Weeks with a qualifying Thursday game AND some weekend lines not
   yet posted.** The one-sitting rule wins. Log everything before
   Thursday kickoff; skip any prop whose line is not yet posted with

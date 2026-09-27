@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A prospective, preregistered forecasting experiment run across the 2026 NFL
 season. The owner logs his own probability on player volume props before
-kickoff, records Fliff's price at the same moment (DraftKings until
+kickoff, records FanDuel's price at the same moment (DraftKings until
 Amendment 1 in `PREREGISTRATION.md`), and scores both after
 the season. It is **not** a betting system and no money is wagered.
 
