@@ -36,6 +36,11 @@ prior does most of the work and hands over as the season goes on.
 
 **Before kickoff — predict, then price**
 
+The usual path is the Prediction Log UI (link in `PROCEDURE.md`): load
+`python slate.py --week 3 --json > week_3.json`, work the queue, then
+paste its "Copy all as CSV" into `ui_export.csv` and run
+`python merge.py` to fold it into `predictions.csv`. The CLI fallback:
+
 ```bash
 python log.py --week 3 -i
 ```
@@ -72,9 +77,11 @@ python resolve.py             # write the outcomes
 ```
 
 Pulls actual results from nflverse and fills `outcome` by comparing the
-real stat to your line. It is the only thing that ever touches an existing
-row, and it writes only `outcome` and `resolved_at` — your probability and
-your reasoning are frozen the moment you log them. A stat landing exactly
+real stat to your line. It writes only `actual`, `outcome` and
+`resolved_at` — your probability and your reasoning are frozen the moment
+you log them. (The only other change an existing row can get is a closing
+price or a pre-kickoff amendment from the UI, carried in by `merge.py`,
+which refuses anything else.) A stat landing exactly
 on the line is marked `push` and dropped from scoring.
 
 **Never open `predictions.csv` in Excel.** It reformats dates and numbers
@@ -120,7 +127,11 @@ Falsifiable, and testable with data you're collecting anyway.
 | `slate.py` | ranks the week's games, shows usage for the selected ones |
 | `log.py` | appends one prediction, devigs the odds |
 | `score.py` | Brier, calibration curve, edge test |
-| `predictions.csv` | the log (created on first write) |
+| `ui.html` | source of the Prediction Log UI (the primary logging path) |
+| `merge.py` | folds the UI's CSV export into `predictions.csv`; never pastes over outcomes |
+| `resolve.py` | fills outcomes from nflverse |
+| `validate.py` | backtests the mechanism on a completed season |
+| `predictions.csv` | the log (created by the first `merge.py`) |
 
 Data is nflverse via `nflreadpy`, free and no API key. Lines come off a
 sportsbook screen by hand — one number twice a week isn't worth an API

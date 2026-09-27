@@ -39,7 +39,7 @@ kickoff.
 
 ```bash
 python slate.py --week N --detail             # human view, review it
-python slate.py --week N --json > week_N_slate.json
+python slate.py --week N --json > week_N.json
 ```
 
 **Inputs:** none. Everything is derived from nflverse.
@@ -53,7 +53,7 @@ python slate.py --week N --json > week_N_slate.json
 - Each prop's `own_def_rank`, `def_rank_opp`, `deficit`, `spread`,
   `implied_total` look plausible for that game.
 
-**Commit:** none required — `week_N_slate.json` is derived and
+**Commit:** none required — `week_N.json` is derived and
 regeneratable. Do not commit it.
 
 ---
@@ -65,9 +65,15 @@ regeneratable. Do not commit it.
 the information set is constant across the week. If you cannot finish in
 one sitting, skip the week entirely and record why.
 
-**Path:** paste `week_N_slate.json` into the artifact logger UI, hit
-"Work the queue," go through every prop in the order the UI presents
-them (soonest kickoff first).
+**Path:** in the logger UI's Step 1, pick `week_N.json` with the file
+picker (or paste its contents) and hit **Load slate**. The queue starts
+on its own; go through every prop in the order it presents them
+(soonest kickoff first). The over/under is locked to the queued side:
+enter your probability that *that* side hits.
+
+Everything you log is saved in the page itself as you go. Reloading the
+page restores the slate, the table in Step 3, and your place in the
+queue — a reload never loses a logged row, so never re-log one.
 
 **Per-prop inputs, in the exact order the UI enforces:**
 
@@ -162,6 +168,11 @@ in. The game-day commit is what makes that claim verifiable.
 **Window:** any time after Monday Night Football has finished and
 nflverse has ingested the box scores (typically Tuesday morning US
 time).
+
+**First:** make sure the last closing-price export (Monday night's) has
+been merged with `merge.py` and committed. `resolve.py` works only on
+`predictions.csv`, never on the UI. Running it early is harmless: a row
+whose own game hasn't finished stays pending.
 
 ```bash
 python resolve.py --dry-run    # preview what will be written
@@ -301,9 +312,22 @@ pre-registrations for next season.
 - **Two-sitting week (couldn't finish in one).** The week is
   contaminated for the contamination-check analysis and should be
   flagged in the write-up. Still log everything and still score.
-- **UI crashes mid-session.** Finish via CLI (`python log.py --week N
-  -i`) but flag the week — the "one sitting, one information set"
-  assumption is weakened.
+- **Step 3 is empty or the queue won't advance.** Reload the page. Rows
+  are saved the moment you hit **Log & next**, so a display problem never
+  means lost data — do not re-log. If a reload doesn't fix it, stop and
+  check before continuing.
+- **UI crashes mid-session.** First export what the UI has and run
+  `merge.py`, then finish via CLI (`python log.py --week N -i`), which
+  appends to `predictions.csv` directly. Flag the week — the "one
+  sitting, one information set" assumption is weakened.
+- **`merge.py` says REFUSED.** It found an export that would change a
+  committed value in a way the rules don't allow, and wrote nothing.
+  Read the lines it prints. Never "fix" it by editing `predictions.csv`
+  or pasting the export over it; work out why the UI and the committed
+  file disagree first.
+- **`merge.py` warns the same prop appears more than once.** A prop was
+  logged twice. Keep the first; the duplicate goes in the write-up as a
+  logging error. Don't delete committed rows.
 - **Resolved row looks wrong.** Check the nflverse row directly. If
   nflverse is wrong, note it in your write-up. Do not hand-edit the
   outcome.

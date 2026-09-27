@@ -41,11 +41,14 @@ python slate.py --week N --detail | less   # look it over
 ### 2. Before Thursday kickoff · log all props in one sitting
 
 - Open the UI (link above).
-- Open **Load a week's slate**, paste the contents of `week_N.json`,
-  hit **Load slate**, then **Work the queue**.
+- In **Step 1**, pick `week_N.json` with the file picker (or paste it),
+  hit **Load slate**. The queue starts on its own.
+- Reloading the page is safe: it restores the slate, your logged rows,
+  and your place in the queue. Never re-log a row.
 - For each prop the queue hands you:
   - **line** — the FanDuel number (e.g. `4.5`)
-  - **over/under** — pre-selected by the queue to match the hypothesis
+  - **over/under** — locked to the queued side; your probability is for
+    that side
   - **your probability** — decimal, 0–1 (e.g. `0.61`), before you look
     at the price
   - **why** — one sentence naming the mechanism
@@ -54,8 +57,9 @@ python slate.py --week N --detail | less   # look it over
   - hit **Log & next**
 - To skip: write the reason in **why**, hit **Skip this one**
 - When the queue empties, hit **Copy all as CSV**, paste into
-  `ui_export.csv` (replace its contents — never paste into
-  `predictions.csv` directly), then:
+  `ui_export.csv` in the repo (create it the first time; after that
+  replace its contents — never paste into `predictions.csv` directly),
+  then:
 
 ```bash
 python merge.py --dry-run   # N new rows, nothing REFUSED
@@ -83,6 +87,8 @@ git add predictions.csv && git commit -m "week N close prices <day>" && git push
 
 ### 4. Tuesday morning · resolve
 
+Monday night's closing-price export must already be merged and committed.
+
 ```bash
 python resolve.py --dry-run    # preview
 python resolve.py              # write outcomes
@@ -109,7 +115,7 @@ Ideas for changes go in a notes file for next season's pre-registration.
 | probability | decimal 0–1, four decimals | `0.6100` |
 | American odds | integer with sign | `-115`, `+105` |
 | line | half-point float | `4.5` |
-| over/under | pre-selected by queue; match `expect` | `over` |
+| over/under | locked by the queue to `expect` | `over` |
 | reasoning | one sentence naming the mechanism | see PROCEDURE.md |
 | skip reason | one sentence: injury, no line, suspended | required for every skip |
 
@@ -122,6 +128,9 @@ Ideas for changes go in a notes file for next season's pre-registration.
   UI enforces this; don't circumvent it.
 - **Never open `predictions.csv` in Excel** — silent reformatting
   destroys the record.
+- **Never paste the UI's CSV into `predictions.csv`.** Paste into
+  `ui_export.csv` and run `python merge.py`; a direct paste erases
+  resolved outcomes.
 - **Never hand-edit outcomes.** Only `resolve.py` writes them.
 - **Never amend a row after its game has started.** The UI enforces
   this; commits before-and-after kickoff are the audit trail.
