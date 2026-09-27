@@ -830,18 +830,19 @@ render();
   if (!db) { note("sync", "offline — nothing will be saved"); return; }
   DB = db;
   try {
-    db.collection("predictions").onSnapshot((docs) => {
+    // onSnapshot delivers a QuerySnapshot: rows are snap.docs, each body is d.data().
+    db.collection("predictions").onSnapshot((snap) => {
       const legacy = ROWS.filter((r) => String(r.id).startsWith("legacy_skip_"));
-      ROWS = docs.map((d) => ({ ...d, id: String(d.id || "").replace(/^predictions\//, "") })).concat(legacy);
+      ROWS = snap.docs.map((d) => ({ ...d.data(), id: d.id })).concat(legacy);
       render();
       if (!$("queuecard").hidden && SLATE) showQueue();
-    });
+    }, (e) => note("sync", "lost connection to saved rows — reload the page (" + (e && e.code || "error") + ")"));
     // Legacy back-compat: fold any pre-migration `skips` collection docs
     // into ROWS as skip-typed rows, so their reasons still export.
     try {
-      db.collection("skips").onSnapshot((docs) => {
-        const legacy = docs.map((d) => ({
-          id: "legacy_skip_" + (d.id || Math.random().toString(36).slice(2)),
+      db.collection("skips").onSnapshot((snap) => {
+        const legacy = snap.docs.map((s) => ({ ...s.data(), _id: s.id })).map((d) => ({
+          id: "legacy_skip_" + d._id,
           week: d.week, game: d.game, player: d.player, market: d.market,
           skip_reason: d.reason || "legacy skip", outcome: "skip",
           logged_at: d.at || "", amendments: [],
@@ -850,7 +851,8 @@ render();
         render();
       });
     } catch (e) {}
-    const meta = await db.doc("meta/slate").get();
+    const metaSnap = await db.doc("meta/slate").get();
+    const meta = metaSnap.exists ? metaSnap.data() : null;
     if (meta && meta.json) {
       try {
         SLATE = JSON.parse(meta.json); fillGames();
