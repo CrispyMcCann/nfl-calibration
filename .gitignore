@@ -5,3 +5,7 @@ __pycache__/
 venv/
 .env
 .DS_Store
+
+# derived / scratch — never committed
+week_*.json
+ui_export.csv

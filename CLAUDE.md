@@ -51,7 +51,8 @@ asked to do any of them, say no and point at this section.
    formatting, tidy columns, or "clean" it. The only sanctioned writers to
    existing rows are those in SCHEMA.md's writer table: `resolve.py`
    (`actual`, `outcome`, `resolved_at` only) and the UI's close-price /
-   amendment actions (`close_*`, `amendments` only). Never add another.
+   pre-kickoff amendment actions, which reach the CSV only via `merge.py`.
+   Never add another, and never paste a UI export over `predictions.csv`.
 2. **Never alter `my_p`, `why`, `logged_at`, `odds`, `market_p`, or `edge` on
    an existing row.** Frozen at log time. If the owner asks, refuse and
    explain why.
@@ -84,6 +85,7 @@ No test suite, no linter, no build. Every entry point is a script at the repo ro
 |---|---|
 | `python slate.py [--week N] [--top K] [--detail] [--json] [--narrow]` | Qualifying games for week N (default: next unplayed week). `--json` emits the slate+queue payload the UI loads. |
 | `python log.py --week N -i` | Interactive prediction entry. Flag form for scripting: see `--help`. |
+| `python merge.py [--dry-run] [export.csv]` | Fold the UI's "Copy all as CSV" (pasted into `ui_export.csv`) into `predictions.csv`. The only path from UI to CSV. |
 | `python resolve.py [--dry-run]` | Fill `actual`/`outcome`/`resolved_at` from nflverse for pending rows. |
 | `python score.py [--min-n N] [--plot path.png] [--bootstrap B]` | Brier scores, calibration table, edge regression. `--min-n` defaults to 100. |
 | `python validate.py --season YYYY [--from-week W]` | Backtest the mechanism (not the market) on a completed season. Defaults to 2025. |
@@ -132,9 +134,14 @@ build anything that circumvents it.
 identical: `log.py`'s `FIELDS`, `slate.py`'s `--json` queue stub, and the
 UI's `CSV_COLS` (in both the artifact and `ui.html`).
 
-**Data flow.** `slate.py --json` → pasted into UI → UI exports whole CSV →
-owner replaces `predictions.csv` → commit/push → `resolve.py` fills outcomes →
-commit/push → `score.py` reads.
+**Data flow.** `slate.py --json` → loaded into UI → rows live in the
+artifact's `db` (`predictions` collection) → "Copy all as CSV" →
+`ui_export.csv` → `merge.py` → `predictions.csv` → commit/push →
+`resolve.py` fills outcomes → commit/push → `score.py` reads. The UI never
+sees outcomes, which is why the export must be merged, not pasted. Both
+`merge.py` and `resolve.py` treat every CSV value as text so committed
+bytes never change. The page reads `db` via `onSnapshot`, which delivers
+a QuerySnapshot (`snap.docs`, `d.data()`), not an array.
 
 ---
 

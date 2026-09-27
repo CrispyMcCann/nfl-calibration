@@ -152,17 +152,19 @@ UI when a queued prop is skipped. Never hand-edit `outcome`.
 
 | writer | new rows | existing rows |
 |---|---|---|
-| UI (queue) | all columns 1–41 | `close_*` (24–28), `amendments` (43) |
+| UI (queue) | all columns 1–41 | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` and appends the old values to `amendments` (43) |
 | UI (manual) | columns 1–41 (populates what it can from the loaded slate; blanks otherwise) | same |
 | UI (skip) | columns 1–14, 29–41, `skip_reason` (42), `outcome="skip"` | never |
 | `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them) | never |
 | `resolve.py` | never | `actual` (44), `outcome` (45), `resolved_at` (46) |
+| `merge.py` | carries UI rows into `predictions.csv` | carries only the UI changes above; never touches 44–46 once filled, never erases a close, refuses anything else |
 | `slate.py` | never | never — read-only |
 | `score.py` | never | never — read-only |
 
-`resolve.py` is the only writer to existing rows, and it touches only
-three columns. Everything else on an existing row is frozen from write
-time.
+The UI's rows reach `predictions.csv` only through `merge.py`, which
+enforces this table: `resolve.py` owns columns 44–46, the UI may add
+closing prices and pre-kickoff amendments, and everything else on an
+existing row is frozen from write time.
 
 ---
 

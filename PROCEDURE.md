@@ -107,8 +107,10 @@ corrupted:**
 **When the sitting ends:**
 
 ```bash
-# export the CSV from the logger UI, replace predictions.csv with it
-git add PREREGISTRATION.md predictions.csv
+# Copy all as CSV in the UI → paste into ui_export.csv (replace its contents)
+python merge.py --dry-run   # check: N new rows, nothing REFUSED
+python merge.py             # folds the export into predictions.csv
+git add predictions.csv
 git commit -m "week N logged before kickoff"
 git push
 ```
@@ -135,9 +137,19 @@ and `edge` remain frozen at Stage 2's values.
 **Commit after every game-day batch of closing prices:**
 
 ```bash
+# Copy all as CSV in the UI → paste into ui_export.csv (replace its contents)
+python merge.py --dry-run   # check: N new rows, nothing REFUSED
+python merge.py             # folds the export into predictions.csv
 git add predictions.csv && git commit -m "week N close prices <day>"
 git push
 ```
+
+**Never paste an export straight into `predictions.csv`.** The UI exports
+its whole table but never sees the outcomes `resolve.py` writes, so a
+straight paste would erase them. `merge.py` appends new rows, adds
+closing prices and pre-kickoff amendments, keeps every resolved outcome,
+and refuses (writing nothing) if the export would change a committed
+value any other way.
 
 Beating the closing line is the stronger claim than beating the opening
 line, because it means the market moved toward you after you were locked

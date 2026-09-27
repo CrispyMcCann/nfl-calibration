@@ -135,8 +135,8 @@
       <li>Enter FanDuel's American odds for both sides. Include the sign: <code>-115</code>, <code>+105</code>. The devigged market probability appears live under the fields.</li>
       <li>Hit <b>Log &amp; next</b>. The queue advances automatically. Do the whole queue in one sitting so the information set stays constant.</li>
       <li>If a prop should be skipped (player out, no line, book suspended), write the reason into the <b>why</b> field and hit <b>Skip this one</b>. The skip is recorded in the CSV with the reason attached.</li>
-      <li>When the queue is empty, hit <b>Copy all as CSV</b>, paste into <code>predictions.csv</code>, then <code>git add predictions.csv &amp;&amp; git commit -m "week N logged" &amp;&amp; git push</code>. The commit before kickoff is what makes the record evidence.</li>
-      <li>Shortly before each game's kickoff, use the row's <b>Close price</b> button to capture the closing FanDuel price. Commit again after each game-day batch of closes.</li>
+      <li>When the queue is empty, hit <b>Copy all as CSV</b>, paste into <code>ui_export.csv</code> in the repo (replace its contents), run <code>python merge.py</code>, then <code>git add predictions.csv &amp;&amp; git commit -m "week N logged" &amp;&amp; git push</code>. Never paste straight into <code>predictions.csv</code>: it holds resolved outcomes this page doesn't have. The commit before kickoff is what makes the record evidence.</li>
+      <li>Shortly before each game's kickoff, use the row's <b>Close price</b> button to capture the closing FanDuel price. After each game-day batch of closes: <b>Copy all as CSV</b> into <code>ui_export.csv</code>, <code>python merge.py</code>, commit + push.</li>
       <li>Tuesday morning: <code>python resolve.py</code> to fill outcomes from nflverse, then <code>python score.py --plot calibration_wN.png</code> to update the calibration curve. Commit both.</li>
     </ol>
   </details>
@@ -278,7 +278,7 @@
   <p class="note" id="sync"></p>
 
   <footer>
-    <p>Paste the CSV into <code>predictions.csv</code>, then run <code>python resolve.py</code> to fill outcomes from nflverse and <code>python score.py</code> to score them. Amended rows keep their original values in the history, so the edit is visible rather than silent. Skipped rows are recorded with the reason and excluded from scoring.</p>
+    <p>Paste the CSV into <code>ui_export.csv</code> and run <code>python merge.py</code> to fold it into <code>predictions.csv</code>, then run <code>python resolve.py</code> to fill outcomes from nflverse and <code>python score.py</code> to score them. Amended rows keep their original values in the history, so the edit is visible rather than silent. Skipped rows are recorded with the reason and excluded from scoring.</p>
   </footer>
 </div>
 
@@ -466,16 +466,24 @@ $("save").addEventListener("click", async () => {
 
   if (EDIT) {
     const prev = ROWS.find((r) => r.id === EDIT);
-    if (prev && Date.now() >= new Date(prev.kickoff).getTime()) {
+    if (prev && prev.kickoff && Date.now() >= new Date(prev.kickoff).getTime()) {
       note("formnote", "that game has started — it can no longer be changed");
       EDIT = null; return;
     }
+    if (!prev) { note("formnote", "that row no longer exists"); EDIT = null; return; }
     const hist = (prev.amendments || []).concat([{
       at: nowISO(),
-      from: { my_p: prev.my_p, line: prev.line, side: prev.side,
-              market: prev.market, player: prev.player, why: prev.why },
+      from: { line: prev.line, my_p: prev.my_p, why: prev.why,
+              odds: prev.odds, opp_odds: prev.opp_odds,
+              market_p: prev.market_p, edge: prev.edge },
     }]);
-    await DB.doc("predictions/" + EDIT).set({ ...prev, ...v, amendments: hist, id: EDIT });
+    // Only the forecast and its prices can be amended. Game, player, market,
+    // side and the slate controls stay exactly as logged.
+    await DB.doc("predictions/" + EDIT).set({
+      ...prev, id: EDIT, amendments: hist,
+      line: v.line, my_p: v.my_p, why: v.why,
+      odds: v.odds, opp_odds: v.opp_odds, market_p: v.market_p, edge: v.edge,
+    });
     note("formnote", "amended — the previous values are kept in the history");
     EDIT = null;
     $("save").textContent = "Log prediction";
@@ -499,7 +507,11 @@ function clearForm(msg = true) {
 $("clear").addEventListener("click", () => clearForm());
 
 /* ---------- table ---------- */
+let RENDER_WAITING = false;
 function render() {
+  // An open closing-price box would be wiped by a re-render; wait for it.
+  if (document.querySelector(".closebox")) { RENDER_WAITING = true; return; }
+  RENDER_WAITING = false;
   const tb = $("rows");
   tb.innerHTML = "";
   const sorted = [...ROWS].sort((a, b) => (b.logged_at || "").localeCompare(a.logged_at || ""));
@@ -570,6 +582,7 @@ function esc(s) { const d = document.createElement("div"); d.textContent = s ?? 
 function startEdit(r) {
   if (Date.now() >= new Date(r.kickoff).getTime()) { note("formnote", "that game has started"); return; }
   EDIT = r.id;
+  $("manualwrap").open = true;
   $("gamemanual").value = r.game;
   $("playermanual").value = r.player;
   $("side").value = r.side_of_mechanism || "trailing";
@@ -589,7 +602,7 @@ function startEdit(r) {
   $("save").textContent = "Save amendment";
   note("formnote", "editing — the original values will be kept in the history");
   gate();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  $("freecard").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function closePrice(r, tr) {
@@ -604,12 +617,13 @@ function closePrice(r, tr) {
   box.append(ok, no);
   tr.querySelector("td:last-child").appendChild(box);
   const [a, b] = box.querySelectorAll("input");
-  no.addEventListener("click", () => box.remove());
+  const done = () => { box.remove(); if (RENDER_WAITING) render(); };
+  no.addEventListener("click", done);
   ok.addEventListener("click", async () => {
     const x = parseFloat(a.value), y = parseFloat(b.value);
     if (isNaN(x) || isNaN(y)) { note("csvnote", "need both closing prices"); return; }
     if (Date.now() >= new Date(r.kickoff).getTime()) {
-      note("csvnote", "that game has started"); box.remove(); return;
+      note("csvnote", "that game has started"); done(); return;
     }
     const mpc = devig(x, y);
     await DB.doc("predictions/" + r.id).set({
@@ -619,7 +633,7 @@ function closePrice(r, tr) {
       closed_at: nowISO(),
     });
     note("csvnote", `closing price saved — edge vs close ${(r.my_p - mpc >= 0 ? "+" : "")}${(r.my_p - mpc).toFixed(3)}`);
-    box.remove();
+    done();
   });
 }
 
@@ -665,7 +679,7 @@ $("copycsv").addEventListener("click", async () => {
   const csv = [CSV_COLS.join(","), ...body].join("\n");
   try {
     await navigator.clipboard.writeText(csv);
-    note("csvnote", `${ROWS.length} rows copied — paste into predictions.csv`);
+    note("csvnote", `${ROWS.length} rows copied — paste into ui_export.csv, then run python merge.py`);
   } catch (e) {
     const ta = document.createElement("textarea");
     ta.value = csv; ta.style.cssText = "position:fixed;left:0;top:0;width:100%;height:50vh;z-index:9";
@@ -691,12 +705,14 @@ function remaining() {
     !done.has([SLATE.week, q.game, q.player, q.market].join("|")));
 }
 
+let QCUR = null;  // key of the prop currently on screen
 function showQueue() {
   const left = remaining();
   const total = SLATE.queue.length;
   if (!left.length) {
+    QCUR = null;
     $("queuecard").hidden = true;
-    $("queuehint").innerHTML = `<b style="color:var(--good)">Queue complete — ${total} props for week ${SLATE.week}.</b> Scroll to Step 3, hit <b>Copy all as CSV</b>, paste into <code>predictions.csv</code>, and commit + push.`;
+    $("queuehint").innerHTML = `<b style="color:var(--good)">Queue complete — ${total} props for week ${SLATE.week}.</b> Scroll to Step 3, hit <b>Copy all as CSV</b>, paste into <code>ui_export.csv</code>, run <code>python merge.py</code>, and commit + push.`;
     note("slatenote", `queue complete — ${total} props for week ${SLATE.week}`);
     return;
   }
@@ -724,9 +740,15 @@ function showQueue() {
     (q.base_snap != null ? `<span>snaps <b>${(q.base_snap*100).toFixed(0)}%</b></span>` : "") +
     `<span>${esc(q.roof)}</span>`;
   $("qou").value = q.expect || "over";
-  ["qline", "qmyp", "qwhy", "qodds", "qopp"].forEach((id) => $(id).value = "");
+  const key = [SLATE.week, q.game, q.player, q.market].join("|");
+  if (key !== QCUR) {
+    // a new prop: clear the inputs. Same prop (a save elsewhere re-rendered
+    // the page): keep whatever is being typed.
+    QCUR = key;
+    ["qline", "qmyp", "qwhy", "qodds", "qopp"].forEach((id) => $(id).value = "");
+    note("qnote", "");
+  }
   qgate();
-  note("qnote", "");
 }
 
 function qgate() {
@@ -793,6 +815,10 @@ $("qlog").addEventListener("click", async () => {
     return;
   }
   if (!DB) { note("qnote", "not connected — nothing was saved"); return; }
+  if (q.kickoff && Date.now() >= new Date(q.kickoff).getTime()) {
+    note("qnote", "this game has kicked off — it can't be predicted now. Write the reason in why and hit Skip this one.");
+    return;
+  }
   const mp = devig(odds, opp);
   const id = Math.random().toString(36).slice(2, 12);
   await DB.doc("predictions/" + id).set({
