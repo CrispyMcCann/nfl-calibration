@@ -196,10 +196,13 @@ def main():
 
         # Soonest kickoff first: a Thursday game locks four days before the
         # Sunday ones, so it has to be worked first in a single sitting.
+        # Within a kickoff slot, all four props of one game together, so
+        # the book's page for that game is worked once. (The UI applies the
+        # same order to any slate it loads.)
         tier_order = {"core_rush": 0, "control_rush": 1,
                       "core_pass": 2, "control_pass": 3}
-        queue.sort(key=lambda q: (q["kickoff"], tier_order.get(q["tier"], 9),
-                                  q["side_of_mechanism"]))
+        queue.sort(key=lambda q: (q["kickoff"], q["game"],
+                                  tier_order.get(q["tier"], 9)))
         # Sanitize NaN/Infinity → null. Python's json.dumps emits `NaN`
         # as a literal by default, which is valid Python but rejected by
         # strict JSON parsers like JavaScript's JSON.parse. `snap_pct`

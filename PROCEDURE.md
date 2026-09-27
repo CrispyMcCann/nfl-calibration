@@ -61,9 +61,16 @@ regeneratable. Do not commit it.
 ### Stage 2 — Before Thursday kickoff. Log every prop in ONE sitting.
 
 **Window:** after Stage 1, and before the earliest kickoff of the week
-(usually Thursday 20:15 ET). Must be a single uninterrupted session so
-the information set is constant across the week. If you cannot finish in
-one sitting, skip the week entirely and record why.
+(usually Thursday 20:15 ET). Aim for a single uninterrupted session so
+the information set is constant across the week.
+
+**If you can't finish in one sitting:** stop, merge and commit what you
+have ("week N logged, sitting 1 of 2"), and finish the rest in a second
+sitting that still ends before the earliest kickoff; commit that as
+"sitting 2 of 2". Rows from the first sitting are never revisited
+because of later news — they stand as logged. The week is flagged as
+two-sitting in the write-up (see Failure modes). The `logged_at` times
+and the two commits are the record of the split.
 
 **Path:** in the logger UI's Step 1, pick `week_N.json` with the file
 picker (or paste its contents) and hit **Load slate**. The queue starts
@@ -309,9 +316,11 @@ pre-registrations for next season.
   stands as logged. Real-world exposure is part of the record; hedging
   it moves the log from evidence to reconstruction. `resolve.py` will
   mark it `dnp` and drop it.
-- **Two-sitting week (couldn't finish in one).** The week is
-  contaminated for the contamination-check analysis and should be
-  flagged in the write-up. Still log everything and still score.
+- **Two-sitting week (couldn't finish in one).** Follow Stage 2: commit
+  each sitting separately, never revisit first-sitting rows, and finish
+  before the earliest kickoff. The week is contaminated for the
+  contamination-check analysis and is flagged in the write-up; it is
+  still logged in full and still scored. Week 3 of 2026 is such a week.
 - **Step 3 is empty or the queue won't advance.** Reload the page. Rows
   are saved the moment you hit **Log & next**, so a display problem never
   means lost data — do not re-log. If a reload doesn't fix it, stop and

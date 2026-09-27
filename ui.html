@@ -723,11 +723,22 @@ function doneKeys() {
   return s;
 }
 
+// Soonest kickoff first; within a kickoff slot, all four props of one game
+// together. Applied here too so slates generated before slate.py adopted
+// this order are worked the same way. Which props are done is decided by
+// key, never by position, so reordering can't skip or repeat a prop.
+const TIER_ORDER = { core_rush: 0, control_rush: 1, core_pass: 2, control_pass: 3 };
+function queueOrder(a, b) {
+  return String(a.kickoff || "").localeCompare(String(b.kickoff || ""))
+      || String(a.game).localeCompare(String(b.game))
+      || (TIER_ORDER[a.tier] ?? 9) - (TIER_ORDER[b.tier] ?? 9);
+}
 function remaining() {
   if (!SLATE || !SLATE.queue) return [];
   const done = doneKeys();
   return SLATE.queue.filter((q) =>
-    !done.has([SLATE.week, q.game, q.player, q.market].join("|")));
+    !done.has([SLATE.week, q.game, q.player, q.market].join("|")))
+    .sort(queueOrder);
 }
 
 let QCUR = null;  // key of the prop currently on screen
