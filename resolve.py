@@ -57,7 +57,11 @@ def main():
     for season in sorted(pending.season.unique()):
         ps = nfl.load_player_stats([int(season)]).to_pandas()
         sch = nfl.load_schedules([int(season)]).to_pandas()
-        played = set(sch[sch.result.notna()].week.astype(int))
+        # Per game, not per week: one finished Thursday game must not make
+        # the rest of that week's unplayed games look finished.
+        done = sch[sch.result.notna()]
+        played = {(int(w), f"{aw} @ {hm}") for w, aw, hm in
+                  done[["week", "away_team", "home_team"]].itertuples(index=False)}
         for idx, r in pending[pending.season == season].iterrows():
             col = STAT.get(str(r.market))
             if col is None:
@@ -70,7 +74,7 @@ def main():
                 # has not happened yet, or the player was inactive. Only the
                 # second is resolvable, and it is NOT a loss — it is a row
                 # with no outcome to score.
-                if int(r.week) in played:
+                if (int(r.week), str(r.game)) in played:
                     print(f"  – dnp   {r.player:22s} {r.market:14s} "
                           f"did not play; voided")
                     dnp += 1
