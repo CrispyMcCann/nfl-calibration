@@ -190,6 +190,38 @@ core-vs-control comparisons. Fliff offers two-sided over/under prices on
 every prop in the queue. One book is used for everything; books are not
 mixed.
 
+**Why Fliff rather than a more established book.** A price source for
+this study has to meet four requirements, in this order:
+
+1. **Two-sided prices on every queued prop.** The devig needs both the
+   over and the under at the same line. A one-sided milestone price
+   carries the book's margin with no way to strip it, so it cannot
+   produce `market_p`.
+2. **Full coverage with one book.** Every queued prop, core and control,
+   rush and pass, priced by the same book. Mixing books would make
+   "the market" mean different things on different rows, and the schema
+   records no book column to separate them later.
+3. **Available at both times the record needs it:** the logging sitting
+   and shortly before each kickoff for the closing price.
+4. **Efficiency.** The sharper the book, the harder the bar in H5.
+
+DraftKings, the original choice, was chosen for requirement 4 and fails
+requirement 1 on rush attempts. Fliff meets requirements 1 and 2 on the
+full week 3 queue, and requirement 3 is expected (its props stay listed
+until kickoff). It is weaker on requirement 4, and that is accepted
+deliberately: no money is wagered, so the book's only job is to supply a
+devig-able market probability, and a complete record against a softer
+market is worth more to this study than a half-empty record against a
+sharper one. Other established books were not surveyed on logging night.
+Whether one of them offers two-sided rush-attempt prices is a question for
+next season's preregistration, not a mid-season switch.
+
+**How the cost is handled.** The book is fixed for the rest of the season
+(the stopping rule applies to it like any other design choice). The
+write-up reports Brier-market and the H5 edge coefficient explicitly as
+"versus Fliff", and does not describe a positive edge as beating the
+betting market in general.
+
 **Timing.** Made before any prediction was logged. Nothing about the
 selection rule, prop set, probabilities, or analysis plan changes.
 
