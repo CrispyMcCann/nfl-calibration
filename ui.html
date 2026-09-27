@@ -200,16 +200,17 @@
   </div>
 
   <details class="manualwrap" id="manualwrap">
-    <summary>Manual entry — fallback if the queue can't be used</summary>
-    <p class="hint" style="margin-top:10px">Only use this if the queue is broken. The queue is the pre-registered path; manual entry means you're picking players yourself, which introduces discretion the design tries to eliminate.</p>
+    <summary id="manualsum">Manual entry — fallback if the queue can't be used</summary>
+    <p class="hint" id="manualhint" style="margin-top:10px">Only use this if the queue is broken. The queue is the pre-registered path; manual entry means you're picking players yourself, which introduces discretion the design tries to eliminate.</p>
   <div class="card" id="freecard">
+    <div class="readout" id="editbanner" hidden style="margin:0 0 14px"></div>
     <div class="step live" id="s1">
       <h3>1 · What you're predicting</h3>
       <div class="grid">
         <label><span class="lab">Game</span><select id="game"></select></label>
         <label><span class="lab">Side of mechanism</span><select id="side">
-          <option value="trailing">Trailing — receiving volume</option>
-          <option value="leading">Leading — rushing volume</option>
+          <option value="trailing">Trailing team (worse defense)</option>
+          <option value="leading">Leading team (better defense)</option>
         </select></label>
         <label><span class="lab">Player</span><select id="player"></select></label>
         <label><span class="lab">Position</span><select id="pos">
@@ -497,7 +498,30 @@ $("save").addEventListener("click", async () => {
   clearForm(false);
 });
 
+/* Edit mode: an amendment can change only the line, probability, why and
+   prices, so the identity fields (game, side, player, market, kickoff) are
+   hidden and the row being amended is named in a banner instead. */
+const IDENT = ["game", "side", "player", "pos", "market"];
+function editView(r) {
+  const on = !!r;
+  IDENT.forEach((id) => { $(id).closest("label").hidden = on; });
+  $("manual").hidden = on;
+  $("editbanner").hidden = !on;
+  $("manualhint").hidden = on;
+  $("manualsum").textContent = on ? "Amend a logged prediction"
+                                  : "Manual entry — fallback if the queue can't be used";
+  if (on) {
+    $("editbanner").innerHTML =
+      `<span>amending <b class="big">${esc(r.player)}</b></span>` +
+      `<span>${esc(r.game)}</span>` +
+      `<span>${esc(r.tier || r.side_of_mechanism || "")}</span>` +
+      `<span><b>${esc(r.side)}</b> ${esc(String(r.market).replace(/_/g, " "))}</span>` +
+      `<span>only line, probability, why and prices can change</span>`;
+  }
+}
+
 function clearForm(msg = true) {
+  editView(null);
   ["line", "myp", "why", "odds", "oppodds", "gamemanual", "playermanual"].forEach((id) => $(id).value = "");
   EDIT = null;
   $("save").textContent = "Log prediction";
@@ -583,6 +607,7 @@ function startEdit(r) {
   if (Date.now() >= new Date(r.kickoff).getTime()) { note("formnote", "that game has started"); return; }
   EDIT = r.id;
   $("manualwrap").open = true;
+  editView(r);
   $("gamemanual").value = r.game;
   $("playermanual").value = r.player;
   $("side").value = r.side_of_mechanism || "trailing";
