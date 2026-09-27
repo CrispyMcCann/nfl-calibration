@@ -56,7 +56,15 @@ def same(a: str, b: str) -> bool:
     try:
         return float(a) == float(b)
     except ValueError:
-        return False
+        pass
+    # JSON fields (amendments): the page's storage may return object keys in
+    # a different order, so compare content, not text.
+    if a[:1] in "[{" and b[:1] in "[{":
+        try:
+            return json.loads(a) == json.loads(b)
+        except json.JSONDecodeError:
+            pass
+    return False
 
 
 def n_amend(v: str) -> int:
