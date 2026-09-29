@@ -30,6 +30,7 @@ Doc roles — read them before changing behavior:
 | `SCHEMA.md` | canonical 46-column definition of `predictions.csv`, including which writer may touch which column |
 | `PROCEDURE.md` | the weekly button-presses, failure modes, TNF-week protocol |
 | `QUICKSTART.md` | one-page weekly checklist |
+| `METHODOLOGY.md` | how the probability numbers get formed each week; evolves; not the pre-registration |
 
 Several design choices that look awkward (interactive prompt order,
 append-only CSV, `--narrow` off by default, the control props) exist to
