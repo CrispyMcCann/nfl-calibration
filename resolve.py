@@ -98,10 +98,18 @@ def main():
 
             over = actual > line
             outcome = int(over if r.side == "over" else not over)
-            mark = "✓" if outcome else "✗"
+            # Mark = directional agreement between your probability and the
+            # observed outcome. It's display-only; the `outcome` column
+            # (whether the queued side hit) is what Brier is computed
+            # against, and that is unaffected by this. ✓ means you leaned
+            # the right way (my_p >= 0.5 and it hit, or my_p < 0.5 and it
+            # missed); ✗ means you leaned wrong. The `you said 0.XX`
+            # value plus `actual` and `line` still tell the full story.
+            my_p = float(r.my_p)
+            mark = "✓" if (my_p >= 0.5) == (outcome == 1) else "✗"
             print(f"  {mark} {r.player:22s} {r.market:14s} "
                   f"actual {actual:5g}  line {line:5g}  "
-                  f"{r.side:5s}  you said {float(r.my_p):.2f}")
+                  f"{r.side:5s}  you said {my_p:.2f}")
             filled += 1
             if not a.dry_run:
                 df.loc[idx, "actual"] = f"{actual:g}"
