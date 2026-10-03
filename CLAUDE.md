@@ -89,6 +89,7 @@ No test suite, no linter, no build. Every entry point is a script at the repo ro
 | `python merge.py [--dry-run] [export.csv]` | Fold the UI's "Copy all as CSV" (pasted into `ui_export.csv`) into `predictions.csv`. The only path from UI to CSV. |
 | `python resolve.py [--dry-run]` | Fill `actual`/`outcome`/`resolved_at` from nflverse for pending rows. |
 | `python score.py [--min-n N] [--plot path.png] [--bootstrap B]` | Brier scores, calibration table, edge regression. `--min-n` defaults to 100. |
+| `python tools/calc.py` | Interactive probability calculator — applies the current METHODOLOGY.md formula and R-001 shrinkage. Use alongside the UI while logging to avoid calculator-key errors. |
 | `python validate.py --season YYYY [--from-week W]` | Backtest the mechanism (not the market) on a completed season. Defaults to 2025. |
 
 `SEASON = 2026` is hardcoded in `slate.py`; `log.py` defaults `--season 2026`.

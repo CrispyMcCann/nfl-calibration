@@ -188,7 +188,30 @@ dated, sourced (why we believe it), and applies from that week
 forward. **Never edit past weeks' logged predictions to reflect a
 new rule** — new rules apply to future logs only.
 
-**No rules yet.** Placeholder format:
+### R-001 — shrinkage toward trailing-3-game base  (added 2026-10-03)
+
+```
+condition:   |raw_expected − base| > 3   for rushing props
+             |raw_expected − base| > 1.5 for receiving props
+applies to:  both
+effect:      expected = base + 0.5 × (raw_expected − base)
+             (keep half the deviation, discard half; only when the
+              threshold is crossed — otherwise expected = raw_expected)
+reasoning:   Shrinkage sweep on Week 3 residuals showed monotonic
+             Brier improvement as raw_expected was pulled toward base.
+             Threshold + halfway captures most of the gain (Brier 0.212
+             vs 0.237 baseline, n=27) while only touching ~20% of rows.
+             Matches an intuitive "±2-3 when far from average" bump
+             with slightly tighter thresholds than Chris was using
+             (3/1.5 beat 4-5/2-3 in the sweep).
+source:      observed in Week 3 (2026-09-27). n=27; sample small.
+             Review after Week 6: if Brier by tier isn't holding up
+             better than the no-rule baseline, retire the rule and
+             log the retirement in this file.
+tooling:     `python tools/calc.py` applies this automatically.
+```
+
+### Placeholder format for future rules:
 
 ```
 ### R-001  (added week N)
