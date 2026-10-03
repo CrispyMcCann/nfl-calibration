@@ -892,6 +892,7 @@ function showQueue() {
     `<span>total <b>${q.total}</b></span>` +
     `<span>pace <b>${q.pace}</b></span>` +
     (q.base_tgt_share != null ? `<span>tgt share <b>${(q.base_tgt_share*100).toFixed(0)}%</b></span>` : "") +
+    (q.base_rec ? `<span>rec/g <b>${q.base_rec}</b></span>` : "") +
     (q.base_car ? `<span>car/g <b>${q.base_car}</b></span>` : "") +
     (q.base_snap != null ? `<span>snaps <b>${(q.base_snap*100).toFixed(0)}%</b></span>` : "") +
     `<span>${esc(q.roof)}</span>`;
