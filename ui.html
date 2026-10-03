@@ -186,9 +186,10 @@
 
     <div class="step veil" id="qs2">
       <h3>Now the odds</h3>
+      <p class="hint" style="margin:0 0 10px">FanDuel layout: over on the left, under on the right. The UI swaps internally to store the price of the queued side as `odds`.</p>
       <div class="grid">
-        <label><span class="lab">American odds, your side</span><input type="number" id="qodds" step="5" placeholder="-115"></label>
-        <label><span class="lab">American odds, other side</span><input type="number" id="qopp" step="5" placeholder="-105"></label>
+        <label><span class="lab">American odds, OVER</span><input type="number" id="qodds" step="5" placeholder="-115"></label>
+        <label><span class="lab">American odds, UNDER</span><input type="number" id="qopp" step="5" placeholder="-105"></label>
       </div>
       <div class="readout" id="qread"><span>fill both prices to see the devigged number</span></div>
     </div>
@@ -249,9 +250,10 @@
 
     <div class="step veil" id="s3">
       <h3>3 · Now the odds</h3>
+      <p class="hint" style="margin:0 0 10px">FanDuel layout: over on the left, under on the right.</p>
       <div class="grid">
-        <label><span class="lab">American odds, your side</span><input type="number" id="odds" step="5" placeholder="-115"></label>
-        <label><span class="lab">American odds, other side</span><input type="number" id="oppodds" step="5" placeholder="-105"></label>
+        <label><span class="lab">American odds, OVER</span><input type="number" id="odds" step="5" placeholder="-115"></label>
+        <label><span class="lab">American odds, UNDER</span><input type="number" id="oppodds" step="5" placeholder="-105"></label>
       </div>
       <div class="readout" id="readout"><span>fill both prices to see the devigged number</span></div>
     </div>
@@ -453,12 +455,17 @@ function gate() {
 ["line", "myp", "why"].forEach((id) => $(id).addEventListener("input", gate));
 
 function paintReadout() {
-  const o = $("odds").value, p = $("oppodds").value, my = parseFloat($("myp").value);
-  if (o === "" || p === "" || isNaN(my)) {
+  // Manual mode: #odds = over, #oppodds = under (FanDuel layout).
+  const oOver = $("odds").value, oUnder = $("oppodds").value;
+  const my = parseFloat($("myp").value);
+  if (oOver === "" || oUnder === "" || isNaN(my)) {
     $("readout").innerHTML = "<span>fill both prices to see the devigged number</span>";
     return;
   }
-  const mp = devig(o, p), edge = my - mp;
+  const side = $("ou").value;
+  const pOver = devig(oOver, oUnder);
+  const mp = side === "over" ? pOver : 1 - pOver;
+  const edge = my - mp;
   $("readout").innerHTML =
     `<span>you <b class="big">${my.toFixed(3)}</b></span>` +
     `<span>market <b class="big">${mp.toFixed(3)}</b></span>` +
@@ -482,10 +489,18 @@ function formValues() {
   const game = ($("gamemanual").value.trim() || $("game").value || "").trim();
   const player = ($("playermanual").value.trim() || $("player").value || "").trim();
   const my_p = parseFloat($("myp").value);
-  const odds = parseFloat($("odds").value), opp = parseFloat($("oppodds").value);
+  // Manual mode uses FanDuel layout: #odds = over, #oppodds = under.
+  const oddsOver = parseFloat($("odds").value);
+  const oddsUnder = parseFloat($("oppodds").value);
   const sideMech = $("side").value;
   const market = $("market").value;
   const [tier, expect] = tierFor(sideMech, market);
+  const side = expect || $("ou").value;
+  // Swap to the "user's side / other side" semantic the CSV expects.
+  const odds = side === "over" ? oddsOver : oddsUnder;
+  const opp = side === "over" ? oddsUnder : oddsOver;
+  const pOver = devig(oddsOver, oddsUnder);
+  const market_p = side === "over" ? pOver : 1 - pOver;
   const kick = $("kick").value ? new Date($("kick").value).toISOString()
              : (gm ? new Date(gm.date + "T18:00:00Z").toISOString() : "");
   // team = trailing or leading depending on side_of_mechanism
@@ -494,10 +509,10 @@ function formValues() {
   return {
     game, team, side_of_mechanism: sideMech, tier, expect,
     player, position: $("pos").value, market,
-    line: parseFloat($("line").value), side: expect || $("ou").value,
+    line: parseFloat($("line").value), side,
     my_p, odds, opp_odds: opp,
-    market_p: Number(devig(odds, opp).toFixed(4)),
-    edge: Number((my_p - devig(odds, opp)).toFixed(4)),
+    market_p: Number(market_p.toFixed(4)),
+    edge: Number((my_p - market_p).toFixed(4)),
     why: $("why").value.trim(),
     kickoff: kick,
     week: SLATE ? SLATE.week : null,
@@ -714,8 +729,14 @@ function startEdit(r) {
   syncOU();
   $("myp").value = r.my_p;
   $("why").value = r.why;
-  $("odds").value = r.odds;
-  $("oppodds").value = r.opp_odds;
+  // Stored as user's side / other side; display in over / under slots.
+  if (r.side === "over") {
+    $("odds").value = r.odds;
+    $("oppodds").value = r.opp_odds;
+  } else {
+    $("odds").value = r.opp_odds;
+    $("oppodds").value = r.odds;
+  }
   if (r.kickoff) {
     const d = new Date(r.kickoff);
     $("kick").value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -969,12 +990,21 @@ function qgate() {
   recomputeFormula();
   const ready = $("qline").value !== "" && $("qmyp").value !== "" && $("qwhy").value.trim().length > 3;
   $("qs2").classList.toggle("veil", !ready);
-  const o = $("qodds").value, p = $("qopp").value, my = parseFloat($("qmyp").value);
-  if (o === "" || p === "" || isNaN(my)) {
+  const oOver = $("qodds").value, oUnder = $("qopp").value;
+  const my = parseFloat($("qmyp").value);
+  if (oOver === "" || oUnder === "" || isNaN(my)) {
     $("qread").innerHTML = "<span>fill both prices to see the devigged number</span>";
     return;
   }
-  const mp = devig(o, p), e = my - mp;
+  // Inputs are over on the left, under on the right (FanDuel layout).
+  // devig(over, under) = P(over). Market probability of the queued side
+  // comes from that: P(side) = P(over) if side==over else 1 − P(over).
+  const left = remaining();
+  const q = left.length ? left[QI] : null;
+  const side = q ? q.expect : "over";
+  const pOver = devig(oOver, oUnder);
+  const mp = side === "over" ? pOver : 1 - pOver;
+  const e = my - mp;
   $("qread").innerHTML =
     `<span>you <b class="big">${my.toFixed(3)}</b></span><span>market <b class="big">${mp.toFixed(3)}</b></span>` +
     `<span>edge <b class="big">${e >= 0 ? "+" : ""}${e.toFixed(3)}</b></span>` +
@@ -1022,10 +1052,14 @@ $("qlog").addEventListener("click", async () => {
   const q = left[QI];
   const my_p = parseFloat($("qmyp").value);
   const line = parseFloat($("qline").value);
-  const odds = parseFloat($("qodds").value), opp = parseFloat($("qopp").value);
+  // UI inputs follow FanDuel layout: qodds = over, qopp = under.
+  // CSV stores odds=user's side, opp_odds=other side; swap based on
+  // the queued side so the stored semantic doesn't change.
+  const oddsOver = parseFloat($("qodds").value);
+  const oddsUnder = parseFloat($("qopp").value);
   const why = $("qwhy").value.trim();
   if (isNaN(line) || isNaN(my_p) || my_p <= 0 || my_p >= 1 || why.length < 4
-      || isNaN(odds) || isNaN(opp)) {
+      || isNaN(oddsOver) || isNaN(oddsUnder)) {
     note("qnote", "need line, a probability between 0 and 1, reasoning, and both prices");
     return;
   }
@@ -1034,7 +1068,10 @@ $("qlog").addEventListener("click", async () => {
     note("qnote", "this game has kicked off — it can't be predicted now. Write the reason in why and hit Skip this one.");
     return;
   }
-  const mp = devig(odds, opp);
+  const pOver = devig(oddsOver, oddsUnder);
+  const mp = q.expect === "over" ? pOver : 1 - pOver;
+  const odds = q.expect === "over" ? oddsOver : oddsUnder;
+  const opp = q.expect === "over" ? oddsUnder : oddsOver;
   // Formula audit: the UI stores what the current methodology said,
   // independent of what the user actually logged. QFORMULA was set by
   // qgate() when the line was entered. If the user overrode my_p, we
