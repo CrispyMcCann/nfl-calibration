@@ -1,21 +1,38 @@
 #!/usr/bin/env python3
-"""Interactive probability calculator for the weekly logging flow.
+"""Interactive probability calculator — Python fallback for the UI's
+methodology block.
 
 Walks one prop at a time: you give it the handful of numbers the queue
 is already showing you (base, pace, line, side, market), it applies the
 METHODOLOGY.md Week 4 formula including R-001 shrinkage, and prints the
-my_p you then type into the UI. Loops until you Ctrl-C.
+my_p you can type into the UI. Loops until Ctrl-C or EOF.
 
     python tools/calc.py
 
-The formula and constants in this file must match METHODOLOGY.md. If
-one changes, update the other in the same commit.
+=============================================================================
+SYNC CONTRACT. This file is one of three identical statements of the
+weekly probability formula. The other two:
+
+  1. METHODOLOGY.md     — the authoritative description
+  2. ui.html            — the JS block headed `=== METHODOLOGY :: <ver> ==`
+                          inside <script>. METH_VER there is the version
+                          string written to each row's methodology_version
+                          column.
+  3. this file          — the Python fallback
+
+Any change here MUST also change METHODOLOGY.md and ui.html in the same
+commit, and bump the version tag (`METH_VER` in ui.html, "Week N"
+heading plus the rule registry here). Rows logged under the old tag
+keep it; new rows get the new tag. CLAUDE.md's "Methodology sync
+contract" has the full rule.
+=============================================================================
 """
 from __future__ import annotations
 import math
 import sys
 
-# Constants — must match METHODOLOGY.md Week 4
+# Constants — must match METHODOLOGY.md Week 4 AND ui.html's METHODOLOGY block.
+METH_VER = "W4-R001"
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
 SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}
 SHRINK_FACTOR = 0.5

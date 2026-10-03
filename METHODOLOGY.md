@@ -15,6 +15,29 @@ Week 3.
 
 ---
 
+## Keeping methodology code in sync
+
+The formula below lives in three places that **must stay identical**:
+
+1. **this file** — authoritative statement in "Week N — the current
+   strategy" and the rules registry.
+2. **`ui.html`** — a JS block headed `/* === METHODOLOGY :: <ver> ==`.
+   The `METH_VER` constant in that block is what the UI writes to each
+   row's `methodology_version` column.
+3. **`tools/calc.py`** — Python fallback. Constants `SIGMA`,
+   `SHRINK_THRESHOLD`, `SHRINK_FACTOR` and the body of `one_prop`
+   must match the JS.
+
+**Change any of them → change all three in the same commit, and bump
+`METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`;
+current: `W4-R001`). Rows logged under the old tag keep it. New rows get
+the new tag. The write-up splits calibration by `methodology_version`
+band, so divergence between the three sources silently corrupts the
+record. If you're a future Claude and only one of the three looks like
+it needs editing, that's a mistake — edit all three.
+
+---
+
 ## The template every week's method should fit
 
 ```

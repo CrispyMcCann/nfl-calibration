@@ -38,6 +38,10 @@ FIELDS = [
     "skip_reason", "amendments",
     # outcome (written only by resolve.py)
     "actual", "outcome", "resolved_at",
+    # formula audit (written by UI's methodology block; see METHODOLOGY.md).
+    # Appended at end so adding them didn't require a predictions.csv
+    # schema migration at introduction time.
+    "formula_p", "formula_expected", "methodology_version",
 ]
 
 

@@ -17,8 +17,10 @@ with `NaN` on merge.
 
 ## Column order and types
 
-**46 columns, in this exact order.** Do not reorder; downstream tools
-(and human readers of the CSV) rely on it. New columns go at the end.
+**49 columns, in this exact order.** Do not reorder; downstream tools
+(and human readers of the CSV) rely on it. New columns go at the end
+of the appropriate semantic group (identifiers, mechanism, prediction,
+price, controls, audit, formula audit, outcome).
 
 ### Identifiers & timing (7)
 
@@ -114,6 +116,18 @@ Blank if the close wasn't captured. Score functions treat blank
 | 45 | `outcome` | see below | `1`, `0`, `push`, `dnp`, `skip`, or empty |
 | 46 | `resolved_at` | ISO-8601 UTC | when `resolve.py` wrote the outcome |
 
+### Formula audit (3) — written by the UI's methodology block; see `METHODOLOGY.md`
+
+Appended at positions 47–49 so introducing them didn't require a
+predictions.csv schema migration. `merge.py` backfills blanks when it
+reads a predictions.csv that pre-dates these columns.
+
+| # | column | type | notes |
+|---|---|---|---|
+| 47 | `formula_p` | float 0–1 | what the methodology formula computed under the current `methodology_version`; `my_p == formula_p` means no override |
+| 48 | `formula_expected` | float | the mean expected value (after R-001 shrinkage, if fired) the formula produced |
+| 49 | `methodology_version` | string | the `METH_VER` tag active at log time, e.g. `W4-R001`. Each row remembers which formula produced it. |
+
 ---
 
 ## Row types
@@ -152,19 +166,20 @@ UI when a queued prop is skipped. Never hand-edit `outcome`.
 
 | writer | new rows | existing rows |
 |---|---|---|
-| UI (queue) | all columns 1–41 | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` and appends the old values to `amendments` (43) |
-| UI (manual) | columns 1–41 (populates what it can from the loaded slate; blanks otherwise) | same |
-| UI (skip) | columns 1–14, 29–41, `skip_reason` (42), `outcome="skip"` | never |
-| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them) | never |
+| UI (queue) | all columns 1–41 and 47–49 (methodology computes `formula_p`, `formula_expected`, `methodology_version` at log time) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
+| UI (manual) | columns 1–41 and 47–49 (same methodology write) | same |
+| UI (skip) | columns 1–14, 29–41, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
+| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–49 left blank (CLI has no methodology integration) | never |
 | `resolve.py` | never | `actual` (44), `outcome` (45), `resolved_at` (46) |
-| `merge.py` | carries UI rows into `predictions.csv` | carries only the UI changes above; never touches 44–46 once filled, never erases a close, refuses anything else |
+| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills columns 47–49 as empty when reading a pre-formula-audit predictions.csv |
 | `slate.py` | never | never — read-only |
 | `score.py` | never | never — read-only |
 
 The UI's rows reach `predictions.csv` only through `merge.py`, which
 enforces this table: `resolve.py` owns columns 44–46, the UI may add
-closing prices and pre-kickoff amendments, and everything else on an
-existing row is frozen from write time.
+closing prices and pre-kickoff amendments (including the recomputed
+formula columns 47–49), and everything else on an existing row is
+frozen from write time.
 
 ---
 

@@ -173,11 +173,13 @@
     <div class="step live" style="margin-top:16px">
       <h3>Your number — before the odds</h3>
       <div class="grid">
-        <label><span class="lab">Line</span><input type="number" id="qline" step="0.5" placeholder="4.5"></label>
+        <label><span class="lab">Line (FanDuel)</span><input type="number" id="qline" step="0.5" placeholder="4.5"></label>
         <label><span class="lab">Over / under · set by the queue</span><select id="qou" disabled title="Locked to the queued side. Enter your probability that this side hits.">
           <option value="over">Over</option><option value="under">Under</option></select></label>
-        <label><span class="lab">Your probability (0–1)</span><input type="number" id="qmyp" step="0.01" min="0.01" max="0.99" placeholder="0.61"></label>
+        <label><span class="lab" title="Optional. If blank, formula uses base × (pace/60). If filled, your value replaces the formula's raw expected; R-001 still applies.">Mean override (optional)</span><input type="number" id="qexpected" step="0.1" placeholder="auto"></label>
+        <label><span class="lab">Your probability (0–1)</span><input type="number" id="qmyp" step="0.01" min="0.01" max="0.99" placeholder="auto"></label>
       </div>
+      <div class="readout" id="qformula" style="margin-top:10px;display:none"></div>
       <label style="margin-top:12px"><span class="lab">Why — name the mechanism (also the skip reason)</span>
         <textarea id="qwhy" placeholder="trails from Q2 on a 16.8 implied total; 20% target share, 78% snaps"></textarea></label>
     </div>
@@ -292,6 +294,72 @@ const nowISO = () => new Date().toISOString();
 
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
+
+/* === METHODOLOGY :: W4-R001 ============================================
+ * SYNC CONTRACT. The weekly probability formula lives in three places
+ * that must stay IDENTICAL:
+ *   1. METHODOLOGY.md — authoritative statement of the formula
+ *   2. this block (ui.html) — what the UI actually uses
+ *   3. tools/calc.py — Python fallback
+ *
+ * When you change this block, change METHODOLOGY.md and tools/calc.py
+ * in the SAME commit and BUMP METH_VER to a new tag. Rows logged under
+ * the old tag stay tagged; new rows get the new tag. Diverging the
+ * three silently invalidates the calibration curve.
+ *
+ * The erf is Abramowitz & Stegun 7.1.26, chosen to match math.erf used
+ * by tools/calc.py. estimateProb mirrors tools/calc.py.one_prop exactly.
+ * ======================================================================= */
+const METH_VER = "W4-R001";
+const SIGMA = { rushing: 5.5, receiving: 2.5 };
+const SHRINK_THRESHOLD = { rushing: 3.0, receiving: 1.5 };
+const SHRINK_FACTOR = 0.5;
+
+function erf(x) {
+  const sign = x < 0 ? -1 : 1;
+  x = Math.abs(x);
+  const a1 =  0.254829592, a2 = -0.284496736, a3 =  1.421413741,
+        a4 = -1.453152027, a5 =  1.061405429, p = 0.3275911;
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+  return sign * y;
+}
+function phi(z) { return 0.5 * (1 + erf(z / Math.SQRT2)); }
+
+function marketKey(market) {
+  return market === "rush_attempts" ? "rushing" : "receiving";
+}
+
+/**
+ * Compute formula_p and intermediates for one prop.
+ * Inputs: base, pace, usageFactor, matchupAdjust, line (numbers); market, side (strings).
+ * Returns { formulaP, expected, rawExpected, deviation, r001Fired } or null if inputs incomplete.
+ */
+function estimateProb({ market, side, base, pace, usageFactor, matchupAdjust, line }) {
+  if (!Number.isFinite(base) || !Number.isFinite(pace) || !Number.isFinite(line)) return null;
+  const uf = Number.isFinite(usageFactor) ? usageFactor : 1.0;
+  const ma = Number.isFinite(matchupAdjust) ? matchupAdjust : 0.0;
+  const mk = marketKey(market);
+  const sigma = SIGMA[mk];
+  const threshold = SHRINK_THRESHOLD[mk];
+  const raw = base * (pace / 60) * uf + ma;
+  const dev = raw - base;
+  const fired = Math.abs(dev) > threshold;
+  const expected = fired ? base + SHRINK_FACTOR * dev : raw;
+  const z = (line - expected) / sigma;
+  const pOver = 1 - phi(z);
+  let myP = side === "over" ? pOver : 1 - pOver;
+  myP = Math.max(0.02, Math.min(0.98, myP));
+  return {
+    formulaP: Number(myP.toFixed(4)),
+    expected: Number(expected.toFixed(3)),
+    rawExpected: Number(raw.toFixed(3)),
+    deviation: Number(dev.toFixed(3)),
+    r001Fired: fired,
+    sigma,
+  };
+}
+/* === /METHODOLOGY ====================================================== */
 
 /* ---------- slate ---------- */
 function fillGames() {
@@ -476,22 +544,50 @@ $("save").addEventListener("click", async () => {
       at: nowISO(),
       from: { line: prev.line, my_p: prev.my_p, why: prev.why,
               odds: prev.odds, opp_odds: prev.opp_odds,
-              market_p: prev.market_p, edge: prev.edge },
+              market_p: prev.market_p, edge: prev.edge,
+              formula_p: prev.formula_p, formula_expected: prev.formula_expected,
+              methodology_version: prev.methodology_version },
     }]);
-    // Only the forecast and its prices can be amended. Game, player, market,
-    // side and the slate controls stay exactly as logged.
-    await DB.doc("predictions/" + EDIT).set({
+    // Recompute formula_p under the current methodology using the row's
+    // base/pace and the amendment's new line. If base/pace aren't on the
+    // row (manual-logged rows), leave formula fields as they were.
+    const base = prev.market === "rush_attempts"
+      ? parseFloat(prev.base_car) : parseFloat(prev.base_rec);
+    const pace = parseFloat(prev.pace);
+    const r = Number.isFinite(base) && Number.isFinite(pace)
+      ? estimateProb({ market: prev.market, side: prev.side || prev.expect,
+                       base, pace, usageFactor: 1.0, matchupAdjust: 0.0,
+                       line: v.line })
+      : null;
+    const amendPatch = {
       ...prev, id: EDIT, amendments: hist,
       line: v.line, my_p: v.my_p, why: v.why,
       odds: v.odds, opp_odds: v.opp_odds, market_p: v.market_p, edge: v.edge,
-    });
+    };
+    if (r) {
+      amendPatch.formula_p = r.formulaP;
+      amendPatch.formula_expected = r.expected;
+      amendPatch.methodology_version = METH_VER;
+    }
+    await DB.doc("predictions/" + EDIT).set(amendPatch);
     note("formnote", "amended — the previous values are kept in the history");
     EDIT = null;
     $("save").textContent = "Log prediction";
   } else {
     const id = Math.random().toString(36).slice(2, 12);
+    // Manual rows: formula audit is best-effort. If the loaded slate has
+    // base/pace for this player, we can compute; otherwise leave blank.
+    const base = v.market === "rush_attempts" ? v.base_car : v.base_rec;
+    const r = Number.isFinite(base) && Number.isFinite(v.pace)
+      ? estimateProb({ market: v.market, side: v.side,
+                       base, pace: v.pace, usageFactor: 1.0,
+                       matchupAdjust: 0.0, line: v.line })
+      : null;
     await DB.doc("predictions/" + id).set({
       ...v, id, logged_at: nowISO(), outcome: "", amendments: [], skip_reason: "",
+      formula_p: r ? r.formulaP : "",
+      formula_expected: r ? r.expected : "",
+      methodology_version: r ? METH_VER : "",
     });
     note("formnote", `logged — you ${v.my_p.toFixed(3)} vs market ${v.market_p.toFixed(3)}`);
   }
@@ -677,7 +773,9 @@ function remove(r) {
 }
 
 /* ---------- csv ---------- */
-// Must match SCHEMA.md exactly. 46 columns.
+// Must match SCHEMA.md exactly. 49 columns.
+// SYNC: this list is one of three identical sources (SCHEMA.md,
+// log.py FIELDS, this). Change one -> change all three.
 const CSV_COLS = [
   "id","logged_at","season","week","game_date","kickoff","weekday",
   "game","team","side_of_mechanism","tier","expect",
@@ -690,6 +788,7 @@ const CSV_COLS = [
   "base_tgt_share","base_rec","base_car","base_snap",
   "skip_reason","amendments",
   "actual","outcome","resolved_at",
+  "formula_p","formula_expected","methodology_version",
 ];
 
 $("copycsv").addEventListener("click", async () => {
@@ -781,13 +880,67 @@ function showQueue() {
     // a new prop: clear the inputs. Same prop (a save elsewhere re-rendered
     // the page): keep whatever is being typed.
     QCUR = key;
-    ["qline", "qmyp", "qwhy", "qodds", "qopp"].forEach((id) => $(id).value = "");
+    ["qline", "qmyp", "qwhy", "qodds", "qopp", "qexpected"].forEach((id) => $(id).value = "");
+    $("qformula").style.display = "none";
     note("qnote", "");
   }
   qgate();
 }
 
+/** Current formula result for the active queue entry, or null. */
+let QFORMULA = null;
+
+function recomputeFormula() {
+  QFORMULA = null;
+  $("qformula").style.display = "none";
+  if (!SLATE) return;
+  const left = remaining();
+  if (!left.length) return;
+  const q = left[QI];
+  const line = parseFloat($("qline").value);
+  if (!Number.isFinite(line)) return;
+  const base = q.market === "rush_attempts" ? q.base_car : q.base_rec;
+  const override = parseFloat($("qexpected").value);
+  // If user supplied a mean override, treat it as raw_expected. Otherwise
+  // compute from the queue's base × pace. Either way R-001 may fire.
+  let r;
+  if (Number.isFinite(override)) {
+    // Inject the override by passing it via matchup_adjust so the
+    // existing estimateProb handles everything uniformly.
+    const expectedBase = base * (q.pace / 60);
+    r = estimateProb({
+      market: q.market, side: q.expect, base, pace: q.pace,
+      usageFactor: 1.0, matchupAdjust: override - expectedBase, line,
+    });
+  } else {
+    r = estimateProb({
+      market: q.market, side: q.expect, base, pace: q.pace,
+      usageFactor: 1.0, matchupAdjust: 0.0, line,
+    });
+  }
+  if (!r) return;
+  QFORMULA = r;
+
+  // Auto-fill qmyp only if it's blank — never clobber a value the user typed.
+  const qmyp = $("qmyp");
+  if (qmyp.value === "") qmyp.value = r.formulaP.toFixed(4);
+
+  const fired = r.r001Fired
+    ? `<span style="color:var(--warn)">R-001 fired · shrunk ${r.rawExpected} → ${r.expected}</span>`
+    : `<span>R-001 skipped (|dev|=${Math.abs(r.deviation).toFixed(2)})</span>`;
+  const overrideFlag = Number.isFinite(override)
+    ? `<span style="color:var(--warn)">mean override</span>` : "";
+  $("qformula").style.display = "flex";
+  $("qformula").innerHTML =
+    `<span>expected <b class="big">${r.expected}</b></span>` +
+    `<span>σ <b class="big">${r.sigma}</b></span>` +
+    `<span>formula my_p <b class="big">${r.formulaP.toFixed(4)}</b></span>` +
+    fired + overrideFlag +
+    `<span style="color:var(--ink-faint)">(${METH_VER})</span>`;
+}
+
 function qgate() {
+  recomputeFormula();
   const ready = $("qline").value !== "" && $("qmyp").value !== "" && $("qwhy").value.trim().length > 3;
   $("qs2").classList.toggle("veil", !ready);
   const o = $("qodds").value, p = $("qopp").value, my = parseFloat($("qmyp").value);
@@ -801,7 +954,7 @@ function qgate() {
     `<span>edge <b class="big">${e >= 0 ? "+" : ""}${e.toFixed(3)}</b></span>` +
     (Math.abs(e) > 0.15 ? `<span style="color:var(--warn)">large claim on a liquid market</span>` : "");
 }
-["qline", "qmyp", "qwhy", "qodds", "qopp"].forEach((id) =>
+["qline", "qmyp", "qwhy", "qodds", "qopp", "qexpected"].forEach((id) =>
   $(id).addEventListener("input", qgate));
 
 $("startqueue").addEventListener("click", () => { QI = 0; showQueue(); });
@@ -856,6 +1009,14 @@ $("qlog").addEventListener("click", async () => {
     return;
   }
   const mp = devig(odds, opp);
+  // Formula audit: the UI stores what the current methodology said,
+  // independent of what the user actually logged. QFORMULA was set by
+  // qgate() when the line was entered. If the user overrode my_p, we
+  // tag the why column with [override] for cheap post-hoc filtering.
+  const formulaP = QFORMULA ? QFORMULA.formulaP : "";
+  const formulaExpected = QFORMULA ? QFORMULA.expected : "";
+  const overrode = Number.isFinite(formulaP) && Math.abs(my_p - formulaP) > 0.001;
+  const whyFinal = overrode && !/\[override\]/.test(why) ? why + " [override]" : why;
   const id = Math.random().toString(36).slice(2, 12);
   await DB.doc("predictions/" + id).set({
     id, logged_at: nowISO(),
@@ -872,10 +1033,14 @@ $("qlog").addEventListener("click", async () => {
     implied_total: q.implied_total, spread: q.spread, total: q.total,
     pace: q.pace, base_tgt_share: q.base_tgt_share, base_rec: q.base_rec,
     base_car: q.base_car, base_snap: q.base_snap,
-    roof: q.roof, why,
+    roof: q.roof, why: whyFinal,
     outcome: "", amendments: [], skip_reason: "",
+    formula_p: formulaP, formula_expected: formulaExpected,
+    methodology_version: METH_VER,
   });
-  note("qnote", `logged — edge ${(my_p - mp >= 0 ? "+" : "")}${(my_p - mp).toFixed(3)}`);
+  note("qnote", overrode
+    ? `logged — my_p ${my_p.toFixed(3)} vs formula ${formulaP.toFixed(3)} [override]`
+    : `logged — edge ${(my_p - mp >= 0 ? "+" : "")}${(my_p - mp).toFixed(3)}`);
   QI = 0;
   setTimeout(showQueue, 350);
 });

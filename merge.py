@@ -35,19 +35,38 @@ EXPORT = HERE / "ui_export.csv"
 
 OUTCOME = {"actual", "outcome", "resolved_at"}
 CLOSE = {"close_odds", "close_opp_odds", "market_p_close", "edge_close", "closed_at"}
-AMENDABLE = {"line", "my_p", "why", "odds", "opp_odds", "market_p", "edge", "amendments"}
+AMENDABLE = {"line", "my_p", "why", "odds", "opp_odds", "market_p", "edge", "amendments",
+             # formula audit — recomputed by the UI when any input changes
+             # (e.g. line edited on an amendment), so they move with the
+             # amendable forecast fields rather than being frozen.
+             "formula_p", "formula_expected", "methodology_version"}
 
 
 def read(path: pathlib.Path) -> list[dict]:
     with open(path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
         header = rows and list(rows[0].keys())
-    if rows and header != FIELDS:
-        missing = [c for c in FIELDS if c not in header]
-        extra = [c for c in header if c not in FIELDS]
-        raise SystemExit(f"{path.name}: columns don't match SCHEMA.md "
-                         f"(missing {missing}, unexpected {extra})")
-    return rows
+    if not rows:
+        return rows
+    # Exact match: the common case once everyone is on the same schema.
+    if header == FIELDS:
+        return rows
+    # Trailing-column backfill: allow a file that is a strict prefix of
+    # FIELDS, filling the missing trailing columns as empty strings.
+    # Introduced to make the formula-audit columns (47–49) landable
+    # without a one-off predictions.csv migration — a predictions.csv
+    # that pre-dates the formula audit will read fine; merge.py's write
+    # on the next successful merge upgrades it to the full schema.
+    if header == FIELDS[: len(header)]:
+        tail = FIELDS[len(header):]
+        for r in rows:
+            for c in tail:
+                r[c] = ""
+        return rows
+    missing = [c for c in FIELDS if c not in header]
+    extra = [c for c in header if c not in FIELDS]
+    raise SystemExit(f"{path.name}: columns don't match SCHEMA.md "
+                     f"(missing {missing}, unexpected {extra})")
 
 
 def same(a: str, b: str) -> bool:

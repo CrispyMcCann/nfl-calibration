@@ -136,6 +136,27 @@ build anything that circumvents it.
 identical: `log.py`'s `FIELDS`, `slate.py`'s `--json` queue stub, and the
 UI's `CSV_COLS` (in both the artifact and `ui.html`).
 
+**Methodology sync contract.** The weekly probability formula lives in
+three places that must stay identical:
+
+1. `METHODOLOGY.md` — authoritative statement of the formula, in
+   section "Week N — the current strategy" plus the rules registry.
+2. `ui.html` — the JS block headed
+   `/* === METHODOLOGY :: <ver> =============` inside `<script>`. The
+   constant `METH_VER` is the version string written to every row's
+   `methodology_version` column.
+3. `tools/calc.py` — the Python fallback. Constants `SIGMA`,
+   `SHRINK_THRESHOLD`, `SHRINK_FACTOR` and the formula body must
+   match the JS block.
+
+**When you change any of them, change all three in the same commit and
+bump `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`,
+e.g. `W4-R001`, `W8-R002`). Rows logged under the old tag stay tagged;
+new rows get the new tag. Mixed-version calibration curves are honest —
+the write-up splits by version band. Never silently edit one of the
+three. If the three diverge, the record's calibration curve becomes
+meaningless because `my_p` values are no longer comparable across rows.
+
 **Data flow.** `slate.py --json` → loaded into UI → rows live in the
 artifact's `db` (`predictions` collection) → "Copy all as CSV" →
 `ui_export.csv` → `merge.py` → `predictions.csv` → commit/push →
