@@ -882,6 +882,8 @@ function showQueue() {
     QCUR = key;
     ["qline", "qmyp", "qwhy", "qodds", "qopp", "qexpected"].forEach((id) => $(id).value = "");
     $("qformula").style.display = "none";
+    QLAST_AUTOFILL = null;
+    QFORMULA = null;
     note("qnote", "");
   }
   qgate();
@@ -889,6 +891,12 @@ function showQueue() {
 
 /** Current formula result for the active queue entry, or null. */
 let QFORMULA = null;
+/** Last value we auto-filled into qmyp. If qmyp still holds this value
+ *  (within rounding), we treat subsequent recomputes as still "auto"
+ *  and update qmyp to the new formula value. Any manual edit by the
+ *  user changes qmyp away from this and locks us out until the user
+ *  clears the field. */
+let QLAST_AUTOFILL = null;
 
 function recomputeFormula() {
   QFORMULA = null;
@@ -921,21 +929,39 @@ function recomputeFormula() {
   if (!r) return;
   QFORMULA = r;
 
-  // Auto-fill qmyp only if it's blank — never clobber a value the user typed.
+  // Auto-fill qmyp when it's blank, OR when it still equals the previous
+  // auto-filled value (meaning the user hasn't manually overridden).
+  // Guards against the "stale clamp" trap where a formula value changes
+  // after an earlier auto-fill and the user doesn't notice.
   const qmyp = $("qmyp");
-  if (qmyp.value === "") qmyp.value = r.formulaP.toFixed(4);
+  const currentP = parseFloat(qmyp.value);
+  const stillAuto = qmyp.value === "" ||
+    (QLAST_AUTOFILL !== null && Number.isFinite(currentP) &&
+     Math.abs(currentP - QLAST_AUTOFILL) < 0.0005);
+  if (stillAuto) {
+    qmyp.value = r.formulaP.toFixed(4);
+    QLAST_AUTOFILL = r.formulaP;
+  }
+
+  // Visible warning if the user's typed my_p diverges from the formula.
+  const typedP = parseFloat(qmyp.value);
+  const diverged = Number.isFinite(typedP) &&
+    Math.abs(typedP - r.formulaP) > 0.001;
 
   const fired = r.r001Fired
     ? `<span style="color:var(--warn)">R-001 fired · shrunk ${r.rawExpected} → ${r.expected}</span>`
     : `<span>R-001 skipped (|dev|=${Math.abs(r.deviation).toFixed(2)})</span>`;
   const overrideFlag = Number.isFinite(override)
     ? `<span style="color:var(--warn)">mean override</span>` : "";
+  const divergedFlag = diverged
+    ? `<span style="color:var(--warn)"><b>override</b>: you ${typedP.toFixed(4)} vs formula ${r.formulaP.toFixed(4)}</span>`
+    : "";
   $("qformula").style.display = "flex";
   $("qformula").innerHTML =
     `<span>expected <b class="big">${r.expected}</b></span>` +
     `<span>σ <b class="big">${r.sigma}</b></span>` +
     `<span>formula my_p <b class="big">${r.formulaP.toFixed(4)}</b></span>` +
-    fired + overrideFlag +
+    fired + overrideFlag + divergedFlag +
     `<span style="color:var(--ink-faint)">(${METH_VER})</span>`;
 }
 
