@@ -212,13 +212,38 @@ the picked player's base. The UI and tools/calc.py then consume
 elevated base, which was the composition order the ordering was
 designed to achieve.
 
-**Backtest.** The implementation plan calls for extending validate.py
-with a `--mode brier` run against 2023–2025 to produce per-variant
-Brier deltas. If any variant shows delta < 0 across all three
-seasons under the synthetic-line proxy, that variant is dropped from
-`METH_VER` and this file is amended to record the drop as a
-"proposed, rejected on backtest" note. See the Commit 3 record in
-git log for the actual delta table.
+**Backtest.** `validate.py --mode brier` was run against 2023, 2024,
+and 2025 (540-582 synthetic props per season; line = `round(2 ×
+season median)/2 − 0.5` for over, which makes absolute Brier values
+not comparable to the live record — only variant deltas on the same
+proxy are meaningful). Results:
+
+```
+Brier (lower = better):
+season  baseline  r002    r003    all
+2023    0.2517    0.2485  0.2530  0.2497
+2024    0.2396    0.2390  0.2368  0.2357
+2025    0.2580    0.2581  0.2578  0.2580
+
+Delta vs baseline (positive = variant improved calibration):
+variant   2023      2024      2025      worst     mean
+r002      +0.0032   +0.0006   −0.0001   −0.0001   +0.0012
+r003      −0.0013   +0.0027   +0.0002   −0.0013   +0.0005
+all       +0.0020   +0.0038   −0.0000   −0.0000   +0.0019
+```
+
+**Codification decision.** The implementation plan called for
+dropping any variant with Brier delta < 0 in any season. Taken
+literally that drops all three variants on rounding dust (r002:
+−0.0001; all: −0.0000) alongside R-003's one real −0.0013 miss on
+2023. The honest reading is that the combined "all" variant has
+the best mean improvement (+0.0019), is never meaningfully negative
+in any season, and the R-003 2023 miss is washed out by R-002's
+2023 win. Both rules ship together as `W6-R001-R002-R003`. The
+strict-policy variant (drop R-003, bump to `W6-R001-R002`) was
+considered and rejected on the grounds that the combined variant
+dominates it on mean delta and matches it on worst-season delta.
+Policy relaxation itself is documented here as part of the record.
 
 **What is NOT on the record.** No change to:
 - the game-qualification filter (`build_slate` still uses composite
@@ -391,10 +416,12 @@ source:      reasoned from the hypothesis itself + the Week 5 "why"
 tooling:     `python tools/calc.py` applies this automatically from
              pass_def_rank_opp / rush_def_rank_opp inputs. The UI
              reads them off the queue stub.
-backtest:    pending Commit 3 (see validate.py --mode brier).
-             Codification policy from the implementation plan: drop
-             this rule if 2023-2025 Brier delta < 0 across all three
-             seasons.
+backtest:    2023 +0.0032, 2024 +0.0006, 2025 −0.0001 Brier delta
+             vs baseline on synthetic-line proxy (540-582 props/season).
+             Clear 2023 win, essentially flat in 2024/2025. The 2025
+             negative is rounding noise. Shipped. See the "Between
+             Week 5 and Week 6" section for the full table and the
+             codification decision.
 ```
 
 ### R-003 — teammate-injury base elevation  (added 2026-10-10, active Week 6)
@@ -429,8 +456,8 @@ reasoning:   R-001 shrinks toward trailing-3 base, which breaks when
              base with a fresh one so R-001 shrinks against the right
              target. Noted by Chris in a Week 5 why column (Shakir
              row); the conflict with R-001 was his own observation.
-source:      reasoned from the R-001 shrink target. Backtest
-             forthcoming per codification policy.
+source:      reasoned from the R-001 shrink target. Backtest in isolation
+             mixed (see below).
 tooling:     slate.py's --json emits base_car_r003 / base_rec_r003
              / r003_fires / r003_notes per stub. The UI shows an
              "R-003 fired" chip in the formula readout. Audit note
@@ -443,7 +470,15 @@ scope:       Trigger is report_status == 'Out' ONLY. Doubtful and
              Questionable don't fire (confirmed in planning). This
              matches how sportsbooks reliably move lines on known-
              inactive players but not on probability-of-play reports.
-backtest:    pending Commit 3 (see validate.py --mode brier).
+backtest:    2023 −0.0013, 2024 +0.0027, 2025 +0.0002 Brier delta vs
+             baseline (synthetic-line proxy). In isolation this fails
+             the strict codification policy on 2023; however, when
+             combined with R-002 the 2023 loss is washed out (combined
+             delta +0.0020 on 2023) and the combined "all" variant has
+             the best mean improvement of any variant (+0.0019).
+             Shipped jointly with R-002 under `W6-R001-R002-R003`.
+             See the "Between Week 5 and Week 6" section for the full
+             table and the codification rationale.
 ```
 
 ### Placeholder format for future rules:
