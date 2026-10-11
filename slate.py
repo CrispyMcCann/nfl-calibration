@@ -150,8 +150,6 @@ def main():
             # receivers should do LESS, the trailing team's back should do
             # LESS. Without these every prop points the same way and a
             # general bias toward overs would look like skill.
-            tp, lp = entry["trailing_players"], entry["leading_players"]
-            tp_rb, lp_wr = entry.get("trailing_rbs", []), entry.get("leading_wrs", [])
             pc = paces.to_dict()
 
             def stub(team, side, pos, pl, market, tier, expect):
@@ -174,24 +172,34 @@ def main():
                         "roof": entry["roof"],
                         "pace": round(float(pc.get(team, float("nan"))), 1),
                         "base_tgt_share": pl.get("share"), "base_rec": pl.get("rec"),
-                        "base_car": pl.get("car"), "base_snap": pl.get("snap")}
+                        "base_car": pl.get("car"), "base_snap": pl.get("snap"),
+                        "primary_depth": pl.get("depth_team")}
+
+            # Queue uses the depth-chart-aware picker so an injured WR1 who
+            # missed the trailing-3 window does not cede the slot to a WR2
+            # with elevated snap share. The top-5 lists above still feed
+            # the UI player dropdowns.
+            leading_rb  = D.primary_at(SEASON, week - 1, g.leading,  "RB")
+            trailing_rb = D.primary_at(SEASON, week - 1, g.trailing, "RB")
+            trailing_wr = D.primary_at(SEASON, week - 1, g.trailing, "WR")
+            leading_wr  = D.primary_at(SEASON, week - 1, g.leading,  "WR")
 
             # Four props per game, stating the mechanism in both directions
             # for BOTH positions. The tiers label which way the hypothesis
             # points, not how much I believe it — belief is what the season
             # measures. Controls exist so that a general bias toward overs
             # cannot masquerade as insight.
-            if lp:
-                queue.append(stub(entry["leading"], "leading", "RB", lp[0],
+            if leading_rb:
+                queue.append(stub(entry["leading"], "leading", "RB", leading_rb,
                                   "rush_attempts", "core_rush", "over"))
-            if tp_rb:
-                queue.append(stub(entry["trailing"], "trailing", "RB", tp_rb[0],
+            if trailing_rb:
+                queue.append(stub(entry["trailing"], "trailing", "RB", trailing_rb,
                                   "rush_attempts", "control_rush", "under"))
-            if tp:
-                queue.append(stub(entry["trailing"], "trailing", "WR", tp[0],
+            if trailing_wr:
+                queue.append(stub(entry["trailing"], "trailing", "WR", trailing_wr,
                                   "receptions", "core_pass", "over"))
-            if lp_wr:
-                queue.append(stub(entry["leading"], "leading", "WR", lp_wr[0],
+            if leading_wr:
+                queue.append(stub(entry["leading"], "leading", "WR", leading_wr,
                                   "receptions", "control_pass", "under"))
 
         # Soonest kickoff first: a Thursday game locks four days before the

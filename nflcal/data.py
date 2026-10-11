@@ -39,6 +39,16 @@ def _snaps(season: int) -> pd.DataFrame:
     return nfl.load_snap_counts([season]).to_pandas()
 
 
+@functools.lru_cache(maxsize=8)
+def _depth(season: int) -> pd.DataFrame:
+    return nfl.load_depth_charts([season]).to_pandas()
+
+
+@functools.lru_cache(maxsize=8)
+def _injuries(season: int) -> pd.DataFrame:
+    return nfl.load_injuries([season]).to_pandas()
+
+
 def _allowed(season: int, through_week: int | None = None) -> pd.DataFrame:
     """Per-team defensive numbers: what each team GAVE UP, per game.
 
@@ -143,6 +153,91 @@ def usage(season: int, through_week: int, team: str, last_n: int = 3) -> pd.Data
 
     agg = agg[agg.position.isin(["WR", "RB", "TE"])]
     return agg.sort_values(["position", "tgt_share"], ascending=[True, False])
+
+
+def depth_order(season: int, team: str, position: str,
+                as_of: str | None = None) -> pd.DataFrame:
+    """Depth-chart ordering for a team's position group, latest snapshot.
+
+    nflverse depth charts have no `week` column, only timestamped `dt`
+    snapshots. Each snapshot is a complete depth chart. Pass `as_of` as a
+    dt-string ceiling (anything <= it is eligible); default is the newest
+    snapshot in the dataset. Rows are returned sorted by `pos_rank` so
+    `[pos_rank == 1]` is the WR1 / RB1.
+    """
+    d = _depth(season)
+    d = d[(d.team == team) & (d.pos_abb == position)]
+    if d.empty:
+        return d
+    if as_of is not None:
+        d = d[d.dt <= as_of]
+        if d.empty:
+            return d
+    latest_dt = d.dt.max()
+    return d[d.dt == latest_dt].sort_values("pos_rank").reset_index(drop=True)
+
+
+def primary_at(season: int, through_week: int, team: str,
+               position: str) -> dict | None:
+    """Pick the WR1 / RB1 for `team` at `through_week`.
+
+    Preference order:
+      1) depth-chart `pos_rank == 1` player, if they appear in trailing-3
+         `usage()` with snap_pct >= 0.4.
+      2) composite 0.6 * snap_pct + 0.4 * share (share is tgt_share for WR,
+         car / team-recent-carries for RB), snap_pct tiebreak.
+
+    Returns a dict shaped like the entries slate.py already consumes
+    (`name, pos, tgt, share, rec, car, snap`) plus `depth_team` and `gms`,
+    or None if no qualifying player exists.
+    """
+    u = usage(season, through_week, team)
+    if u.empty:
+        return None
+    u = u[u.position == position]
+    if u.empty:
+        return None
+
+    d = depth_order(season, team, position)
+
+    if not d.empty:
+        top_name = d[d.pos_rank == 1]["player_name"]
+        if not top_name.empty:
+            match = u[u.player_display_name == top_name.iloc[0]]
+            if not match.empty:
+                r = match.iloc[0]
+                if float(r.snap_pct or 0) >= 0.4:
+                    return _player_dict(r, position, depth_team=1)
+
+    u = u.copy()
+    if position == "RB":
+        total_car = max(float(u.car.sum()), 1e-6)
+        share = u.car / total_car
+    else:
+        share = u.tgt_share.fillna(0)
+    u = u.assign(_composite=0.6 * u.snap_pct.fillna(0) + 0.4 * share)
+    u = u.sort_values(["_composite", "snap_pct"], ascending=[False, False])
+    r = u.iloc[0]
+    depth = None
+    if not d.empty:
+        hit = d[d.player_name == r.player_display_name]
+        if not hit.empty:
+            depth = int(hit.iloc[0]["pos_rank"])
+    return _player_dict(r, position, depth_team=depth)
+
+
+def _player_dict(r, position: str, depth_team: int | None) -> dict:
+    return {
+        "name": r.player_display_name,
+        "pos": position,
+        "tgt": round(float(r.tgt or 0), 1),
+        "share": round(float(r.tgt_share or 0), 3),
+        "rec": round(float(r.rec or 0), 1),
+        "car": round(float(r.car or 0), 1),
+        "snap": round(float(r.snap_pct or 0), 2),
+        "depth_team": depth_team,
+        "gms": int(r.gms),
+    }
 
 
 def upcoming(season: int, week: int) -> pd.DataFrame:
