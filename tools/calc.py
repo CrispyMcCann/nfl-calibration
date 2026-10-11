@@ -67,6 +67,47 @@ def matchup_adjust_r002(market: str,
     return 0.0
 
 
+def compute_myp(market: str, side: str, base: float, pace: float,
+                line: float, pass_rank_opp: int | None = None,
+                rush_rank_opp: int | None = None,
+                usage_factor: float = 1.0,
+                apply_r002: bool = True,
+                apply_r001: bool = True) -> dict:
+    """Pure form of the Week 6 probability formula. `one_prop` is the
+    interactive wrapper around this; validate.py's --mode brier reuses it
+    to backtest variants (apply_r001/apply_r002 off = earlier methodologies).
+
+    R-003 is applied in slate.py BEFORE the formula runs — pass the
+    already-elevated base here. For backtesting a baseline that doesn't
+    include R-003, pass the raw base. The function has no notion of
+    which rule produced `base`.
+
+    Returns {my_p, expected, raw_expected, deviation, r001_fired,
+             r002_fired, matchup_adjust}.
+    """
+    sigma = SIGMA[market]
+    threshold = SHRINK_THRESHOLD[market]
+    matchup_adjust = matchup_adjust_r002(market, pass_rank_opp, rush_rank_opp) \
+        if apply_r002 else 0.0
+    raw_expected = base * (pace / 60.0) * usage_factor + matchup_adjust
+    deviation = raw_expected - base
+    r001_fired = apply_r001 and abs(deviation) > threshold
+    expected = (base + SHRINK_FACTOR * deviation) if r001_fired else raw_expected
+    z = (line - expected) / sigma
+    p_over = 1 - phi(z)
+    my_p = p_over if side == "over" else 1 - p_over
+    my_p = max(0.02, min(0.98, my_p))
+    return {
+        "my_p": my_p,
+        "expected": expected,
+        "raw_expected": raw_expected,
+        "deviation": deviation,
+        "r001_fired": r001_fired,
+        "r002_fired": matchup_adjust != 0,
+        "matchup_adjust": matchup_adjust,
+    }
+
+
 def ask(label: str, caster=str, default=None, choices=None) -> object:
     """Prompt until the user gives a valid value. EOF exits the program."""
     while True:
@@ -122,16 +163,18 @@ def one_prop() -> None:
     # Composition: R-003 is already baked into `base` (user typed the
     # elevated value from the queue). R-002 populates matchup_adjust.
     # Formula then runs, and R-001 shrinks against the (fresh) base.
-    matchup_adjust = matchup_adjust_r002(market, pass_rank_opp, rush_rank_opp)
-    raw_expected = base * (pace / 60.0) * usage_factor + matchup_adjust
-    deviation = raw_expected - base
-    r001_fired = abs(deviation) > threshold
-    expected = (base + SHRINK_FACTOR * deviation) if r001_fired else raw_expected
-
+    result = compute_myp(market, side, base, pace, line,
+                         pass_rank_opp=pass_rank_opp,
+                         rush_rank_opp=rush_rank_opp,
+                         usage_factor=usage_factor)
+    matchup_adjust = result["matchup_adjust"]
+    raw_expected = result["raw_expected"]
+    deviation = result["deviation"]
+    r001_fired = result["r001_fired"]
+    expected = result["expected"]
+    my_p = result["my_p"]
     z = (line - expected) / sigma
     p_over = 1 - phi(z)
-    my_p = p_over if side == "over" else 1 - p_over
-    my_p = max(0.02, min(0.98, my_p))  # clamp per methodology
 
     print()
     r002_tag = ""

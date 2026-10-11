@@ -162,24 +162,59 @@ def usage(season: int, through_week: int, team: str, last_n: int = 3) -> pd.Data
 
 def depth_order(season: int, team: str, position: str,
                 as_of: str | None = None) -> pd.DataFrame:
-    """Depth-chart ordering for a team's position group, latest snapshot.
+    """Depth-chart ordering for a team's position group.
 
-    nflverse depth charts have no `week` column, only timestamped `dt`
-    snapshots. Each snapshot is a complete depth chart. Pass `as_of` as a
-    dt-string ceiling (anything <= it is eligible); default is the newest
-    snapshot in the dataset. Rows are returned sorted by `pos_rank` so
-    `[pos_rank == 1]` is the WR1 / RB1.
+    nflverse depth-chart schemas differ by era:
+      * 2025+ (dt/team/pos_abb/pos_rank/player_name): timestamped
+        snapshots; latest snapshot is used unless `as_of` ceiling is set.
+      * 2024- (season/club_code/week/depth_team/position/full_name):
+        weekly rows; `as_of` is read as a week number (int-or-string),
+        otherwise the latest week in the frame is used.
+
+    Returned frame is normalised to columns {player_name, pos_rank} so
+    callers downstream read a single schema. Rows are sorted by
+    `pos_rank` ascending.
     """
     d = _depth(season)
-    d = d[(d.team == team) & (d.pos_abb == position)]
     if d.empty:
-        return d
-    if as_of is not None:
-        d = d[d.dt <= as_of]
+        return pd.DataFrame(columns=["player_name", "pos_rank"])
+
+    if "team" in d.columns and "pos_abb" in d.columns:
+        # 2025+ schema
+        d = d[(d.team == team) & (d.pos_abb == position)]
         if d.empty:
-            return d
-    latest_dt = d.dt.max()
-    return d[d.dt == latest_dt].sort_values("pos_rank").reset_index(drop=True)
+            return pd.DataFrame(columns=["player_name", "pos_rank"])
+        if as_of is not None:
+            d = d[d.dt <= as_of]
+            if d.empty:
+                return pd.DataFrame(columns=["player_name", "pos_rank"])
+        latest = d.dt.max()
+        d = d[d.dt == latest]
+        return (d.rename(columns={"pos_rank": "pos_rank"})
+                 [["player_name", "pos_rank"]]
+                 .sort_values("pos_rank").reset_index(drop=True))
+
+    # 2024- schema
+    team_col = "club_code" if "club_code" in d.columns else "team"
+    name_col = "full_name" if "full_name" in d.columns else "player_name"
+    rank_col = "depth_team" if "depth_team" in d.columns else "pos_rank"
+    pos_col = "position"
+    d = d[(d[team_col] == team) & (d[pos_col] == position)]
+    if d.empty:
+        return pd.DataFrame(columns=["player_name", "pos_rank"])
+    if as_of is not None and "week" in d.columns:
+        try:
+            d = d[d.week <= int(as_of)]
+        except (ValueError, TypeError):
+            pass
+        if d.empty:
+            return pd.DataFrame(columns=["player_name", "pos_rank"])
+    if "week" in d.columns:
+        latest = d.week.max()
+        d = d[d.week == latest]
+    return (d.rename(columns={name_col: "player_name", rank_col: "pos_rank"})
+             [["player_name", "pos_rank"]]
+             .sort_values("pos_rank").reset_index(drop=True))
 
 
 def primary_at(season: int, through_week: int, team: str,
