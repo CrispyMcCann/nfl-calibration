@@ -118,6 +118,9 @@ def main():
         week = a.week or D.last_completed_week(SEASON) + 1
         s = build_slate(SEASON, week, narrow=a.narrow)
         paces = D.pace(SEASON, week - 1)
+        # R-002 uses position-specific defensive EPA ranks from the same
+        # shrunk ratings table that build_slate used.
+        ratings = D.defense_ratings(SEASON, through_week=week - 1)
         games, queue = [], []
         for _, g in (s.head(a.top) if a.top else s).iterrows():
             entry = {k: (v.item() if hasattr(v, "item") else v)
@@ -155,6 +158,19 @@ def main():
             def stub(team, side, pos, pl, market, tier, expect):
                 own = entry["trail_def_rank"] if side == "trailing" else entry["lead_def_rank"]
                 opp = entry["lead_def_rank"] if side == "trailing" else entry["trail_def_rank"]
+                opp_team = g.leading if side == "trailing" else g.trailing
+                pass_rk = int(ratings.loc[opp_team, "pass_def_rank"]) \
+                    if opp_team in ratings.index else None
+                rush_rk = int(ratings.loc[opp_team, "rush_def_rank"]) \
+                    if opp_team in ratings.index else None
+                # R-003 base elevation (zero-op if no same-position teammate
+                # is Out this week). Fires in the slate so the UI and
+                # tools/calc.py can read a single elevated base and the
+                # formula's R-001 shrinks against the fresh base.
+                elev = D.elevation_r003(SEASON, week, team, pos,
+                                        pl.get("rec", 0.0),
+                                        pl.get("car", 0.0),
+                                        exclude_player=pl["name"])
                 is_home = entry["game"].split(" @ ")[1] == team
                 return {"game": entry["game"], "game_date": entry["date"],
                         "kickoff": entry["kickoff"],
@@ -173,16 +189,26 @@ def main():
                         "pace": round(float(pc.get(team, float("nan"))), 1),
                         "base_tgt_share": pl.get("share"), "base_rec": pl.get("rec"),
                         "base_car": pl.get("car"), "base_snap": pl.get("snap"),
-                        "primary_depth": pl.get("depth_team")}
+                        "primary_depth": pl.get("depth_team"),
+                        # --- R-002 (position-specific defense) ---
+                        "pass_def_rank_opp": pass_rk,
+                        "rush_def_rank_opp": rush_rk,
+                        # --- R-003 (teammate-injury base elevation) ---
+                        "base_rec_r003": elev["base_rec"],
+                        "base_car_r003": elev["base_car"],
+                        "r003_fires": elev["fires"],
+                        "r003_notes": elev["notes"]}
 
             # Queue uses the depth-chart-aware picker so an injured WR1 who
             # missed the trailing-3 window does not cede the slot to a WR2
-            # with elevated snap share. The top-5 lists above still feed
-            # the UI player dropdowns.
-            leading_rb  = D.primary_at(SEASON, week - 1, g.leading,  "RB")
-            trailing_rb = D.primary_at(SEASON, week - 1, g.trailing, "RB")
-            trailing_wr = D.primary_at(SEASON, week - 1, g.trailing, "WR")
-            leading_wr  = D.primary_at(SEASON, week - 1, g.leading,  "WR")
+            # with elevated snap share. `exclude_out_week=week` also skips
+            # a depth-1 player who is listed Out THIS week, falling through
+            # to the next-eligible player; R-003 then elevates the pick's
+            # base to account for the out teammate's inherited volume.
+            leading_rb  = D.primary_at(SEASON, week - 1, g.leading,  "RB", exclude_out_week=week)
+            trailing_rb = D.primary_at(SEASON, week - 1, g.trailing, "RB", exclude_out_week=week)
+            trailing_wr = D.primary_at(SEASON, week - 1, g.trailing, "WR", exclude_out_week=week)
+            leading_wr  = D.primary_at(SEASON, week - 1, g.leading,  "WR", exclude_out_week=week)
 
             # Four props per game, stating the mechanism in both directions
             # for BOTH positions. The tiers label which way the hypothesis

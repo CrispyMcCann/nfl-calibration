@@ -42,6 +42,13 @@ FIELDS = [
     # Appended at end so adding them didn't require a predictions.csv
     # schema migration at introduction time.
     "formula_p", "formula_expected", "methodology_version",
+    # W6 additions (R-002 position-matchup, R-003 teammate-injury base
+    # elevation, and queue-picker audit). Appended per append-only
+    # schema convention; merge.py's trailing-column backfill handles
+    # pre-existing rows without a migration script.
+    "primary_depth",
+    "pass_def_rank_opp", "rush_def_rank_opp",
+    "base_rec_r003", "base_car_r003", "r003_fires", "r003_notes",
 ]
 
 

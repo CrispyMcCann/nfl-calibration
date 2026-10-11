@@ -297,7 +297,7 @@ const nowISO = () => new Date().toISOString();
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
 
-/* === METHODOLOGY :: W4-R001 ============================================
+/* === METHODOLOGY :: W6-R001-R002-R003 =================================
  * SYNC CONTRACT. The weekly probability formula lives in three places
  * that must stay IDENTICAL:
  *   1. METHODOLOGY.md — authoritative statement of the formula
@@ -309,13 +309,23 @@ function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
  * the old tag stay tagged; new rows get the new tag. Diverging the
  * three silently invalidates the calibration curve.
  *
+ * Composition order for Week 6:
+ *   1. R-003 base elevation  (applied in slate.py, consumed as `base`)
+ *   2. R-002 matchup_adjust  (position-specific EPA-allowed rank)
+ *   3. formula raw_expected  = base × (pace/60) × usage_factor + matchup_adjust
+ *   4. R-001 shrinkage       (halves |raw − base| when it exceeds threshold)
+ *
  * The erf is Abramowitz & Stegun 7.1.26, chosen to match math.erf used
  * by tools/calc.py. estimateProb mirrors tools/calc.py.one_prop exactly.
  * ======================================================================= */
-const METH_VER = "W4-R001";
+const METH_VER = "W6-R001-R002-R003";
 const SIGMA = { rushing: 5.5, receiving: 2.5 };
 const SHRINK_THRESHOLD = { rushing: 3.0, receiving: 1.5 };
 const SHRINK_FACTOR = 0.5;
+// R-002 constants. Position-specific EPA-allowed rank: 1=best D, 32=worst.
+const MATCHUP_BUMP = { rushing: 1.0, receiving: 0.5 };
+const MATCHUP_WORST_K = 8;
+const MATCHUP_BEST_K = 8;
 
 function erf(x) {
   const sign = x < 0 ? -1 : 1;
@@ -333,14 +343,34 @@ function marketKey(market) {
 }
 
 /**
- * Compute formula_p and intermediates for one prop.
- * Inputs: base, pace, usageFactor, matchupAdjust, line (numbers); market, side (strings).
- * Returns { formulaP, expected, rawExpected, deviation, r001Fired } or null if inputs incomplete.
+ * R-002: additive matchup bump from the opposing defense's position-
+ * specific EPA-allowed rank. Receiving reads passRankOpp; rushing reads
+ * rushRankOpp. Returns 0 if the relevant rank is missing/non-finite.
  */
-function estimateProb({ market, side, base, pace, usageFactor, matchupAdjust, line }) {
+function matchupAdjustR002(market, passRankOpp, rushRankOpp) {
+  const mk = marketKey(market);
+  const rank = mk === "rushing" ? rushRankOpp : passRankOpp;
+  if (!Number.isFinite(rank)) return 0.0;
+  const bump = MATCHUP_BUMP[mk];
+  if (rank >= 33 - MATCHUP_WORST_K) return +bump;  // 25..32 → worst D
+  if (rank <= MATCHUP_BEST_K)       return -bump;  // 1..8   → best D
+  return 0.0;
+}
+
+/**
+ * Compute formula_p and intermediates for one prop.
+ * Inputs: base (R-003-elevated), pace, usageFactor, passRankOpp, rushRankOpp,
+ *   matchupOverride (optional; if finite, replaces R-002's output), line
+ *   (numbers); market, side (strings).
+ * Returns { formulaP, expected, rawExpected, deviation, r001Fired,
+ *   r002Fired, matchupAdjust, sigma } or null if inputs incomplete.
+ */
+function estimateProb({ market, side, base, pace, usageFactor,
+                        passRankOpp, rushRankOpp, matchupOverride, line }) {
   if (!Number.isFinite(base) || !Number.isFinite(pace) || !Number.isFinite(line)) return null;
   const uf = Number.isFinite(usageFactor) ? usageFactor : 1.0;
-  const ma = Number.isFinite(matchupAdjust) ? matchupAdjust : 0.0;
+  const r002 = matchupAdjustR002(market, passRankOpp, rushRankOpp);
+  const ma = Number.isFinite(matchupOverride) ? matchupOverride : r002;
   const mk = marketKey(market);
   const sigma = SIGMA[mk];
   const threshold = SHRINK_THRESHOLD[mk];
@@ -358,6 +388,8 @@ function estimateProb({ market, side, base, pace, usageFactor, matchupAdjust, li
     rawExpected: Number(raw.toFixed(3)),
     deviation: Number(dev.toFixed(3)),
     r001Fired: fired,
+    r002Fired: ma !== 0,
+    matchupAdjust: Number(ma.toFixed(3)),
     sigma,
   };
 }
@@ -564,15 +596,21 @@ $("save").addEventListener("click", async () => {
               methodology_version: prev.methodology_version },
     }]);
     // Recompute formula_p under the current methodology using the row's
-    // base/pace and the amendment's new line. If base/pace aren't on the
-    // row (manual-logged rows), leave formula fields as they were.
-    const base = prev.market === "rush_attempts"
+    // base/pace and the amendment's new line. Prefer R-003-elevated base
+    // if the row carries it (W6+ logs); fall back to the raw base for
+    // older rows. R-002 picks up the opposing defense's position-specific
+    // rank if the row carries it.
+    const baseR003 = prev.market === "rush_attempts"
+      ? parseFloat(prev.base_car_r003) : parseFloat(prev.base_rec_r003);
+    const baseRaw = prev.market === "rush_attempts"
       ? parseFloat(prev.base_car) : parseFloat(prev.base_rec);
+    const base = Number.isFinite(baseR003) ? baseR003 : baseRaw;
     const pace = parseFloat(prev.pace);
     const r = Number.isFinite(base) && Number.isFinite(pace)
       ? estimateProb({ market: prev.market, side: prev.side || prev.expect,
-                       base, pace, usageFactor: 1.0, matchupAdjust: 0.0,
-                       line: v.line })
+                       base, pace, usageFactor: 1.0, line: v.line,
+                       passRankOpp: parseFloat(prev.pass_def_rank_opp),
+                       rushRankOpp: parseFloat(prev.rush_def_rank_opp) })
       : null;
     const amendPatch = {
       ...prev, id: EDIT, amendments: hist,
@@ -592,11 +630,15 @@ $("save").addEventListener("click", async () => {
     const id = Math.random().toString(36).slice(2, 12);
     // Manual rows: formula audit is best-effort. If the loaded slate has
     // base/pace for this player, we can compute; otherwise leave blank.
-    const base = v.market === "rush_attempts" ? v.base_car : v.base_rec;
+    // Prefer R-003-elevated base when the slate exposed it.
+    const baseR003 = v.market === "rush_attempts" ? v.base_car_r003 : v.base_rec_r003;
+    const baseRaw  = v.market === "rush_attempts" ? v.base_car      : v.base_rec;
+    const base = Number.isFinite(baseR003) ? baseR003 : baseRaw;
     const r = Number.isFinite(base) && Number.isFinite(v.pace)
       ? estimateProb({ market: v.market, side: v.side,
-                       base, pace: v.pace, usageFactor: 1.0,
-                       matchupAdjust: 0.0, line: v.line })
+                       base, pace: v.pace, usageFactor: 1.0, line: v.line,
+                       passRankOpp: v.pass_def_rank_opp,
+                       rushRankOpp: v.rush_def_rank_opp })
       : null;
     await DB.doc("predictions/" + id).set({
       ...v, id, logged_at: nowISO(), outcome: "", amendments: [], skip_reason: "",
@@ -794,7 +836,7 @@ function remove(r) {
 }
 
 /* ---------- csv ---------- */
-// Must match SCHEMA.md exactly. 49 columns.
+// Must match SCHEMA.md exactly. 56 columns.
 // SYNC: this list is one of three identical sources (SCHEMA.md,
 // log.py FIELDS, this). Change one -> change all three.
 const CSV_COLS = [
@@ -810,6 +852,11 @@ const CSV_COLS = [
   "skip_reason","amendments",
   "actual","outcome","resolved_at",
   "formula_p","formula_expected","methodology_version",
+  // Added W6 (R-002/R-003 and queue-picker audit) — appended per
+  // append-only schema convention; merge.py backfills blanks on old rows.
+  "primary_depth",
+  "pass_def_rank_opp","rush_def_rank_opp",
+  "base_rec_r003","base_car_r003","r003_fires","r003_notes",
 ];
 
 $("copycsv").addEventListener("click", async () => {
@@ -929,23 +976,31 @@ function recomputeFormula() {
   const q = left[QI];
   const line = parseFloat($("qline").value);
   if (!Number.isFinite(line)) return;
-  const base = q.market === "rush_attempts" ? q.base_car : q.base_rec;
+  // R-003 elevated base is already baked into base_rec_r003 / base_car_r003
+  // by slate.py. Legacy queues without the _r003 fields fall through to
+  // the raw base_car / base_rec so old slates still work.
+  const baseR003 = q.market === "rush_attempts" ? q.base_car_r003 : q.base_rec_r003;
+  const baseRaw  = q.market === "rush_attempts" ? q.base_car      : q.base_rec;
+  const base = Number.isFinite(baseR003) ? baseR003 : baseRaw;
   const override = parseFloat($("qexpected").value);
   // If user supplied a mean override, treat it as raw_expected. Otherwise
-  // compute from the queue's base × pace. Either way R-001 may fire.
+  // compute from the queue's base × pace (with R-002 picked up from the
+  // opp's position-specific defense rank). Either way R-001 may fire.
   let r;
   if (Number.isFinite(override)) {
-    // Inject the override by passing it via matchup_adjust so the
-    // existing estimateProb handles everything uniformly.
+    // Inject the override by passing it via matchupOverride so the
+    // existing estimateProb handles everything uniformly, bypassing R-002.
     const expectedBase = base * (q.pace / 60);
     r = estimateProb({
       market: q.market, side: q.expect, base, pace: q.pace,
-      usageFactor: 1.0, matchupAdjust: override - expectedBase, line,
+      usageFactor: 1.0, matchupOverride: override - expectedBase, line,
+      passRankOpp: q.pass_def_rank_opp, rushRankOpp: q.rush_def_rank_opp,
     });
   } else {
     r = estimateProb({
       market: q.market, side: q.expect, base, pace: q.pace,
-      usageFactor: 1.0, matchupAdjust: 0.0, line,
+      usageFactor: 1.0, line,
+      passRankOpp: q.pass_def_rank_opp, rushRankOpp: q.rush_def_rank_opp,
     });
   }
   if (!r) return;
@@ -973,6 +1028,13 @@ function recomputeFormula() {
   const fired = r.r001Fired
     ? `<span style="color:var(--warn)">R-001 fired · shrunk ${r.rawExpected} → ${r.expected}</span>`
     : `<span>R-001 skipped (|dev|=${Math.abs(r.deviation).toFixed(2)})</span>`;
+  // R-003 fires in the slate; the UI reports it from the queue stub flag.
+  const r003 = q.r003_fires
+    ? `<span style="color:var(--warn)">R-003 fired · base ${(q.market==="rush_attempts"?q.base_car:q.base_rec).toFixed(2)} → ${base.toFixed(2)}</span>`
+    : "";
+  const r002 = r.r002Fired
+    ? `<span style="color:var(--warn)">R-002 fired · matchup ${r.matchupAdjust>=0?"+":""}${r.matchupAdjust}</span>`
+    : "";
   const overrideFlag = Number.isFinite(override)
     ? `<span style="color:var(--warn)">mean override</span>` : "";
   const divergedFlag = diverged
@@ -983,7 +1045,7 @@ function recomputeFormula() {
     `<span>expected <b class="big">${r.expected}</b></span>` +
     `<span>σ <b class="big">${r.sigma}</b></span>` +
     `<span>formula my_p <b class="big">${r.formulaP.toFixed(4)}</b></span>` +
-    fired + overrideFlag + divergedFlag +
+    r003 + r002 + fired + overrideFlag + divergedFlag +
     `<span style="color:var(--ink-faint)">(${METH_VER})</span>`;
 }
 
@@ -1040,6 +1102,11 @@ $("qskip").addEventListener("click", async () => {
     spread: q.spread, total: q.total, roof: q.roof, pace: q.pace,
     base_tgt_share: q.base_tgt_share, base_rec: q.base_rec,
     base_car: q.base_car, base_snap: q.base_snap,
+    primary_depth: q.primary_depth,
+    pass_def_rank_opp: q.pass_def_rank_opp,
+    rush_def_rank_opp: q.rush_def_rank_opp,
+    base_rec_r003: q.base_rec_r003, base_car_r003: q.base_car_r003,
+    r003_fires: q.r003_fires, r003_notes: q.r003_notes,
     skip_reason: reason,
     outcome: "skip", amendments: [],
   });
@@ -1097,6 +1164,11 @@ $("qlog").addEventListener("click", async () => {
     implied_total: q.implied_total, spread: q.spread, total: q.total,
     pace: q.pace, base_tgt_share: q.base_tgt_share, base_rec: q.base_rec,
     base_car: q.base_car, base_snap: q.base_snap,
+    primary_depth: q.primary_depth,
+    pass_def_rank_opp: q.pass_def_rank_opp,
+    rush_def_rank_opp: q.rush_def_rank_opp,
+    base_rec_r003: q.base_rec_r003, base_car_r003: q.base_car_r003,
+    r003_fires: q.r003_fires, r003_notes: q.r003_notes,
     roof: q.roof, why: whyFinal,
     outcome: "", amendments: [], skip_reason: "",
     formula_p: formulaP, formula_expected: formulaExpected,

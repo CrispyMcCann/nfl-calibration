@@ -17,7 +17,7 @@ with `NaN` on merge.
 
 ## Column order and types
 
-**49 columns, in this exact order.** Do not reorder; downstream tools
+**56 columns, in this exact order.** Do not reorder; downstream tools
 (and human readers of the CSV) rely on it. New columns go at the end
 of the appropriate semantic group (identifiers, mechanism, prediction,
 price, controls, audit, formula audit, outcome).
@@ -128,6 +128,23 @@ reads a predictions.csv that pre-dates these columns.
 | 48 | `formula_expected` | float | the mean expected value (after R-001 shrinkage, if fired) the formula produced |
 | 49 | `methodology_version` | string | the `METH_VER` tag active at log time, e.g. `W4-R001`. Each row remembers which formula produced it. |
 
+### Rule audit (7) — slate-side inputs the W6+ formula consumes
+
+Appended at positions 50–56 for the W6 methodology bump (R-002 position
+matchup, R-003 teammate-injury base elevation, queue picker audit).
+`merge.py`'s trailing-column backfill fills blanks on rows that pre-date
+these columns.
+
+| # | column | type | notes |
+|---|---|---|---|
+| 50 | `primary_depth` | int or blank | the `pos_rank` of the queued player on nflverse's latest depth chart snapshot (`1` is WR1/RB1). Blank if the picker fell through to the composite fallback and the player isn't on the depth chart. |
+| 51 | `pass_def_rank_opp` | int 1–32 | shrunk `pass_epa_allowed_rank` of the opponent (R-002 input for receiving props). 1 = best pass defense. |
+| 52 | `rush_def_rank_opp` | int 1–32 | shrunk `rush_epa_allowed_rank` of the opponent (R-002 input for rushing props). 1 = best rush defense. |
+| 53 | `base_rec_r003` | float | post-R-003 receiving base. Equals `base_rec` if R-003 doesn't fire; otherwise `base_rec + 0.4 × sum(out_WR.rec/g)`. The formula consumes this, not `base_rec`. |
+| 54 | `base_car_r003` | float | post-R-003 rushing base. Equals `base_car` if R-003 doesn't fire; otherwise `base_car + 0.6 × sum(out_RB.car/g)`. |
+| 55 | `r003_fires` | bool-as-string | `True` if R-003 elevated the base this row. |
+| 56 | `r003_notes` | string | audit string naming the out teammate(s) and the inherited volume, e.g. `"DeVonta Smith OUT; +0.4 × 8.0 rec/g"`. Empty when R-003 doesn't fire. |
+
 ---
 
 ## Row types
@@ -166,12 +183,12 @@ UI when a queued prop is skipped. Never hand-edit `outcome`.
 
 | writer | new rows | existing rows |
 |---|---|---|
-| UI (queue) | all columns 1–41 and 47–49 (methodology computes `formula_p`, `formula_expected`, `methodology_version` at log time) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
-| UI (manual) | columns 1–41 and 47–49 (same methodology write) | same |
-| UI (skip) | columns 1–14, 29–41, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
-| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–49 left blank (CLI has no methodology integration) | never |
+| UI (queue) | all columns 1–41, 47–49, and 50–56 (methodology computes 47–49 at log time; 50–56 are carried from the slate stub) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
+| UI (manual) | columns 1–41, 47–49, and 50–56 where the slate provides them | same |
+| UI (skip) | columns 1–14, 29–41, 50–56, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
+| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–56 left blank (CLI has no methodology integration) | never |
 | `resolve.py` | never | `actual` (44), `outcome` (45), `resolved_at` (46) |
-| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills columns 47–49 as empty when reading a pre-formula-audit predictions.csv |
+| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills trailing columns (47–49 and 50–56) as empty when reading a predictions.csv that pre-dates them |
 | `slate.py` | never | never — read-only |
 | `score.py` | never | never — read-only |
 

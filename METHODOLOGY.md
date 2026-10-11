@@ -30,7 +30,7 @@ The formula below lives in three places that **must stay identical**:
 
 **Change any of them → change all three in the same commit, and bump
 `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`;
-current: `W4-R001`). Rows logged under the old tag keep it. New rows get
+current: `W6-R001-R002-R003`). Rows logged under the old tag keep it. New rows get
 the new tag. The write-up splits calibration by `methodology_version`
 band, so divergence between the three sources silently corrupts the
 record. If you're a future Claude and only one of the three looks like
@@ -170,7 +170,124 @@ initially set to 0. Rules that use them will accumulate below.
 
 ---
 
-## Week 4 — the current strategy
+## Between Week 5 and Week 6 — what changed and why
+
+Three changes land together for the Week 6 slate:
+
+**Change 1: Queue picker uses depth chart + snap-pct, not just
+trailing-3 target share.** (Code fix, not formula.) Observed Week 5:
+LA Rams `control_pass` queued Davante Adams (0.260 share, 0.81 snap)
+over Puka Nacua (0.240 share, 0.90 snap) because Nacua missed early-
+season games and had a thinner trailing-3 mean. `slate.py`'s picker
+now consults nflverse's depth-chart `pos_rank` for authoritative WR1
+/ RB1 identification, falling back to a composite
+`0.6 × snap_pct + 0.4 × share` score when the depth-chart leader
+doesn't appear in trailing-3 usage with ≥ 0.4 snap. Players listed
+Out this week are skipped by the picker (fed through `exclude_out_week`),
+so the slot falls to the next-eligible player instead of being queued
+and then self-elevated by R-003. Shipped in commit "slate: use depth
+chart + snap-pct for queue player picker" ahead of this methodology
+bump.
+
+**Change 2: R-002 — position-specific defense matchup.** The
+hypothesis says game script is determined by defensive quality, and
+the Week 3–5 analysis uses the composite `def_rank`. But a pass-
+leaky defense isn't the same as a rush-leaky one, and the queued
+prop is position-specific. R-002 uses `pass_def_rank_opp` for
+receiving props and `rush_def_rank_opp` for rushing props, both
+read from the already-shrunk defense_ratings() table. Bump sizes
+are small on purpose (1.0 carry, 0.5 reception) — below sigma/5 so
+R-001 can still rein in anything that stacks the wrong way.
+
+**Change 3: R-003 — teammate-injury base elevation.** Chris flagged
+this during Week 5 logging: R-001 shrinks toward the trailing-3
+base, which is stale when a position teammate has been out and
+targets have redistributed. Rather than fight R-001, R-003 replaces
+the stale base with a fresh one at the slate stage — slate.py reads
+nflreadpy's weekly injury report, finds same-position teammates with
+`report_status == 'Out'` AND trailing-3 `snap_pct ≥ 0.25`, and adds
+0.4 × out-WR rec/g (receiving) or 0.6 × out-RB car/g (rushing) to
+the picked player's base. The UI and tools/calc.py then consume
+`base_car_r003` / `base_rec_r003`; R-001 shrinks toward this
+elevated base, which was the composition order the ordering was
+designed to achieve.
+
+**Backtest.** The implementation plan calls for extending validate.py
+with a `--mode brier` run against 2023–2025 to produce per-variant
+Brier deltas. If any variant shows delta < 0 across all three
+seasons under the synthetic-line proxy, that variant is dropped from
+`METH_VER` and this file is amended to record the drop as a
+"proposed, rejected on backtest" note. See the Commit 3 record in
+git log for the actual delta table.
+
+**What is NOT on the record.** No change to:
+- the game-qualification filter (`build_slate` still uses composite
+  def_rank × spread agreement; MIN_WEEK/MIN_DEFICIT/MAX_DEFICIT
+  unchanged).
+- the prop set (still four props per game, same tiers).
+- sigma, SHRINK_THRESHOLD, SHRINK_FACTOR (R-001 unchanged).
+
+---
+
+## Week 6 — the current strategy
+
+**Version tag:** `W6-R001-R002-R003`. Rows logged from Week 6 forward
+carry this in `methodology_version`. Weeks 3–5 keep their original
+tags (`W3` for Week 3, `W4-R001` for Weeks 4 and 5) and are scored
+under their own methodology.
+
+**Composition order.** Three rules now stack. They are composed in a
+specific order so they don't interfere:
+
+```
+  R-003 (base elevation)   —>  base is set in slate.py; the UI/calc.py
+                                consume base_car_r003 / base_rec_r003
+  R-002 (matchup_adjust)   —>  additive bump from opp's position-specific
+                                EPA-allowed rank
+  formula                  —>  raw_expected = base × (pace/60) × usage_factor
+                                             + matchup_adjust
+  R-001 (shrinkage)        —>  if |raw_expected − base| > threshold:
+                                 expected = base + 0.5 × (raw_expected − base)
+                                else:  expected = raw_expected
+```
+
+The ordering choice matters because R-001's shrink target is `base`.
+If R-003 adjusts `base` *first*, R-001 shrinks toward the fresh,
+depth-chart-aware base rather than the stale pre-injury one — this is
+the resolution of the R-001/R-003 conflict Chris flagged in a Week 5
+`why` column.
+
+**Sigma** — unchanged from Week 4:
+- Rushing: `sigma = 5.5` (constant)
+- Receptions: `sigma = 2.5` (constant)
+
+**Mean formula.** Same shape as Week 4, with R-002 now populating
+`matchup_adjust`:
+
+```
+expected = base_r003 × (pace / 60) × usage_factor + matchup_adjust_r002
+         (then R-001 shrinks if deviation exceeds threshold)
+```
+
+- `base_r003` = `base_car_r003` for rushing props, `base_rec_r003`
+  for receiving props. Equals the raw trailing-3 base when R-003
+  does not fire.
+- `pace` = team YTD plays/game ÷ 60.
+- `usage_factor` = 1.0 by default; same hook as Week 4.
+- `matchup_adjust_r002` = R-002 output (see registry).
+
+**Probability:**
+```
+z = (line - expected) / sigma
+my_p = 1 - Φ(z)   for over
+my_p = Φ(z)       for under
+```
+
+**Clamp:** `my_p ∈ [0.02, 0.98]`.
+
+---
+
+## Week 4 — superseded strategy
 
 **Sigma:**
 - Rushing: `sigma = 5.5` (constant)
@@ -234,10 +351,105 @@ source:      observed in Week 3 (2026-09-27). n=27; sample small.
 tooling:     `python tools/calc.py` applies this automatically.
 ```
 
+### R-002 — position-specific defense matchup  (added 2026-10-10, active Week 6)
+
+```
+condition:   opp's position-specific EPA-allowed rank falls in top-8
+             (1..8, best defenses) OR bottom-8 (25..32, worst defenses).
+             Position-specific rank is pass_def_rank_opp for receiving
+             props, rush_def_rank_opp for rushing props. The rank is
+             the SHRUNK one from defense_ratings(), same as the game-
+             qualification filter uses.
+applies to:  both
+effect:      matchup_adjust += MATCHUP_BUMP[market] when opp is in the
+             bottom-8 of that market's defense;
+             matchup_adjust -= MATCHUP_BUMP[market] when opp is in the
+             top-8;
+             otherwise matchup_adjust unchanged (zero).
+
+             MATCHUP_BUMP = { rushing: 1.0 carry, receiving: 0.5 rec }
+
+             Entry point: `matchupAdjustR002` in ui.html, mirrored by
+             `matchup_adjust_r002` in tools/calc.py.
+reasoning:   The structural hypothesis says a weak defense trails,
+             which shapes game script and therefore volume. The game-
+             qualification filter already uses the composite def_rank
+             to pick qualifying games. R-002 refines that by letting
+             the OPPONENT's position-specific weakness (pass or rush)
+             shift the expected volume on the correct side of the
+             prop. A pass-leaky defense means more rec for the
+             trailing WR1; a rush-leaky defense means more car for
+             the leading RB1 — mirrored in reverse for the controls.
+             Bump sizes are intentionally < sigma/5 so a single
+             mis-ranked defense cannot swing my_p dramatically; the
+             rule is designed to adjust the mean by a defensible
+             fraction of a game-level standard deviation.
+source:      reasoned from the hypothesis itself + the Week 5 "why"
+             column that proposed splitting defense by matchup. See
+             the "Between Week 4 and Week 6" entry below. Not fit
+             on Week 4 residuals.
+tooling:     `python tools/calc.py` applies this automatically from
+             pass_def_rank_opp / rush_def_rank_opp inputs. The UI
+             reads them off the queue stub.
+backtest:    pending Commit 3 (see validate.py --mode brier).
+             Codification policy from the implementation plan: drop
+             this rule if 2023-2025 Brier delta < 0 across all three
+             seasons.
+```
+
+### R-003 — teammate-injury base elevation  (added 2026-10-10, active Week 6)
+
+```
+condition:   a same-position teammate on the player's team has
+             report_status == 'Out' for the upcoming week AND their
+             trailing-3-game snap_pct >= 0.25.
+applies to:  both
+effect:      base is replaced with an elevated base BEFORE the
+             formula runs:
+               WR  →  base_rec += 0.4 × sum(out_teammate.rec/g)
+               RB  →  base_car += 0.6 × sum(out_teammate.car/g)
+
+             R-003 fires in slate.py; the UI and tools/calc.py
+             consume the elevated value as base_rec_r003 or
+             base_car_r003. R-001 then shrinks toward the ELEVATED
+             base, which is the whole point: without this ordering,
+             R-001 would shrink the elevated expectation back toward
+             a stale pre-injury trailing-3 average.
+
+             Inheritance rates:
+               - RB 0.6 reflects that one lead back inherits most of
+                 an out RB's carries (next-up pattern); carries
+                 concentrate.
+               - WR 0.4 reflects that targets disperse among multiple
+                 receivers when a WR1 misses; the WR2 only sees part
+                 of the vacated share.
+reasoning:   R-001 shrinks toward trailing-3 base, which breaks when
+             the trailing-3 base is from games where the now-out
+             player took targets/carries. R-003 replaces the stale
+             base with a fresh one so R-001 shrinks against the right
+             target. Noted by Chris in a Week 5 why column (Shakir
+             row); the conflict with R-001 was his own observation.
+source:      reasoned from the R-001 shrink target. Backtest
+             forthcoming per codification policy.
+tooling:     slate.py's --json emits base_car_r003 / base_rec_r003
+             / r003_fires / r003_notes per stub. The UI shows an
+             "R-003 fired" chip in the formula readout. Audit note
+             is persisted to r003_notes in the row.
+threshold:   The ≥ 0.25 trailing-3 snap_pct requirement filters out
+             a scrub-RB going Out from artificially elevating the
+             starter — a 4%-snap backup doesn't actually cede volume
+             to the lead back when he's inactive.
+scope:       Trigger is report_status == 'Out' ONLY. Doubtful and
+             Questionable don't fire (confirmed in planning). This
+             matches how sportsbooks reliably move lines on known-
+             inactive players but not on probability-of-play reports.
+backtest:    pending Commit 3 (see validate.py --mode brier).
+```
+
 ### Placeholder format for future rules:
 
 ```
-### R-001  (added week N)
+### R-NNN  (added week N)
 condition:   e.g., "def_rank_opp >= 25 AND deficit > 6"
 applies to:  rushing | receiving | both
 effect:      e.g., "usage_factor *= 1.10"
@@ -265,4 +477,21 @@ touched the record.
 one contamination category and will be treated as such in the
 write-up.
 
-**Week 4:** no deviations logged yet.
+**Week 4:** no deviations logged.
+
+**Week 5:** no methodology deviations. All 29 predicted rows carry
+`methodology_version = W4-R001`. One queue-selection concern was
+identified post-logging and documented in the "Between Week 5 and
+Week 6" entry above: the depth-chart-aware picker was not yet active
+when Week 5 was logged, so BUF @ LA `control_pass` was Davante Adams
+(0.260 share) rather than Puka Nacua (0.240 share, higher snap).
+Chris's logged `my_p` for Adams is valid *for Adams* — the record is
+not contaminated — but the pre-registered prop for that slot was
+"LA leading WR under receptions", and Nacua is the depth-chart WR1.
+This is a data-selection issue, not a formula deviation; the write-up
+should note that a handful of Week 5 rows prop'd a WR2 under this
+rubric. Running `python slate.py --week 5 --json` after commit
+`3653d3f` will show the queue picks the depth-chart WR1 for the same
+games, which is how to audit which rows were affected.
+
+**Week 6:** no deviations logged yet.

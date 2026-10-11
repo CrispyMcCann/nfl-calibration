@@ -108,6 +108,11 @@ def defense_ratings(season: int, through_week: int) -> pd.DataFrame:
     # distance and field position.
     out["def_score"] = (out["pass_epa_allowed_rank"] + out["rush_epa_allowed_rank"]) / 2
     out["def_rank"] = out["def_score"].rank(method="min").astype(int)
+    # Convenience aliases that R-002 consumes. Position-specific EPA ranks
+    # are the signal — raw-yardage ranks are already on the frame too but
+    # EPA is the better defensive proxy (see composite note above).
+    out["pass_def_rank"] = out["pass_epa_allowed_rank"]
+    out["rush_def_rank"] = out["rush_epa_allowed_rank"]
     return out.sort_values("def_rank")
 
 
@@ -178,8 +183,14 @@ def depth_order(season: int, team: str, position: str,
 
 
 def primary_at(season: int, through_week: int, team: str,
-               position: str) -> dict | None:
+               position: str,
+               exclude_out_week: int | None = None) -> dict | None:
     """Pick the WR1 / RB1 for `team` at `through_week`.
+
+    If `exclude_out_week` is given, players whose `report_status == 'Out'`
+    for that week are dropped from consideration — so a depth-1 WR who
+    is inactive this week yields to the next-eligible player instead of
+    being queued and then R-003-self-elevated.
 
     Preference order:
       1) depth-chart `pos_rank == 1` player, if they appear in trailing-3
@@ -198,16 +209,29 @@ def primary_at(season: int, through_week: int, team: str,
     if u.empty:
         return None
 
-    d = depth_order(season, team, position)
+    out_names: set[str] = set()
+    if exclude_out_week is not None:
+        inj = _injuries(season)
+        out_rows = inj[(inj.week == exclude_out_week) & (inj.team == team)
+                       & (inj.position == position)
+                       & (inj.report_status == "Out")]
+        out_names = set(out_rows.full_name.dropna().astype(str))
 
-    if not d.empty:
-        top_name = d[d.pos_rank == 1]["player_name"]
-        if not top_name.empty:
-            match = u[u.player_display_name == top_name.iloc[0]]
-            if not match.empty:
-                r = match.iloc[0]
-                if float(r.snap_pct or 0) >= 0.4:
-                    return _player_dict(r, position, depth_team=1)
+    u = u[~u.player_display_name.isin(out_names)]
+    if u.empty:
+        return None
+
+    d = depth_order(season, team, position)
+    d_eligible = d[~d.player_name.isin(out_names)] if not d.empty else d
+
+    if not d_eligible.empty:
+        top_name = d_eligible.sort_values("pos_rank").iloc[0]["player_name"]
+        top_rank = int(d_eligible.sort_values("pos_rank").iloc[0]["pos_rank"])
+        match = u[u.player_display_name == top_name]
+        if not match.empty:
+            r = match.iloc[0]
+            if float(r.snap_pct or 0) >= 0.4:
+                return _player_dict(r, position, depth_team=top_rank)
 
     u = u.copy()
     if position == "RB":
@@ -237,6 +261,70 @@ def _player_dict(r, position: str, depth_team: int | None) -> dict:
         "snap": round(float(r.snap_pct or 0), 2),
         "depth_team": depth_team,
         "gms": int(r.gms),
+    }
+
+
+def elevation_r003(season: int, week: int, team: str, position: str,
+                   base_rec: float, base_car: float,
+                   exclude_player: str | None = None) -> dict:
+    """R-003 base elevation. Returns the pre- or post-elevation base plus
+    an audit note.
+
+    Fires when a same-position teammate on `team` has `report_status == 'Out'`
+    for `week` AND their trailing-3 snap share was ≥ 25% (so a scrub-RB
+    going out does not elevate the starter artificially). `exclude_player`
+    (the player we're predicting for) is removed from the out-list first,
+    so a WR1 picked as the queue slot does not elevate herself when the
+    picker already fell back past her.
+
+    Inheritance rate is position-specific:
+      WR : base_rec += 0.4 × sum(out_teammate.rec/g)
+      RB : base_car += 0.6 × sum(out_teammate.car/g)
+
+    Returns {"base_rec", "base_car", "fires", "notes"}.
+    """
+    inj = _injuries(season)
+    out = inj[(inj.week == week) & (inj.team == team)
+             & (inj.position == position)
+             & (inj.report_status == "Out")]
+    if exclude_player is not None:
+        out = out[out.full_name != exclude_player]
+    quiet = {"base_rec": round(float(base_rec or 0), 2),
+             "base_car": round(float(base_car or 0), 2),
+             "fires": False, "notes": ""}
+    if out.empty:
+        return quiet
+
+    u = usage(season, week - 1, team)
+    if u.empty:
+        return quiet
+
+    rec_add, car_add, notes = 0.0, 0.0, []
+    for _, row in out.iterrows():
+        hit = u[(u.player_display_name == row.full_name)
+                & (u.position == position)]
+        if hit.empty:
+            continue
+        r = hit.iloc[0]
+        if float(r.snap_pct or 0) < 0.25:
+            continue
+        if position == "WR":
+            rec_val = float(r.rec or 0)
+            rec_add += 0.4 * rec_val
+            notes.append(f"{row.full_name} OUT; +0.4 × {rec_val:.1f} rec/g")
+        elif position == "RB":
+            car_val = float(r.car or 0)
+            car_add += 0.6 * car_val
+            notes.append(f"{row.full_name} OUT; +0.6 × {car_val:.1f} car/g")
+
+    if not notes:
+        return quiet
+
+    return {
+        "base_rec": round(float(base_rec or 0) + rec_add, 2),
+        "base_car": round(float(base_car or 0) + car_add, 2),
+        "fires": True,
+        "notes": "; ".join(notes),
     }
 
 
