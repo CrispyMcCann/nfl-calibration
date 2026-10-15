@@ -297,7 +297,7 @@ const nowISO = () => new Date().toISOString();
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
 
-/* === METHODOLOGY :: W6-R001-R002-R003 =================================
+/* === METHODOLOGY :: W6-R001-R002-R003b ================================
  * SYNC CONTRACT. The weekly probability formula lives in three places
  * that must stay IDENTICAL:
  *   1. METHODOLOGY.md — authoritative statement of the formula
@@ -318,7 +318,7 @@ function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
  * The erf is Abramowitz & Stegun 7.1.26, chosen to match math.erf used
  * by tools/calc.py. estimateProb mirrors tools/calc.py.one_prop exactly.
  * ======================================================================= */
-const METH_VER = "W6-R001-R002-R003";
+const METH_VER = "W6-R001-R002-R003b";
 const SIGMA = { rushing: 5.5, receiving: 2.5 };
 const SHRINK_THRESHOLD = { rushing: 3.0, receiving: 1.5 };
 const SHRINK_FACTOR = 0.5;

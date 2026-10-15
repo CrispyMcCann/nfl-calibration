@@ -30,7 +30,7 @@ The formula below lives in three places that **must stay identical**:
 
 **Change any of them → change all three in the same commit, and bump
 `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`;
-current: `W6-R001-R002-R003`). Rows logged under the old tag keep it. New rows get
+current: `W6-R001-R002-R003b`). Rows logged under the old tag keep it. New rows get
 the new tag. The write-up splits calibration by `methodology_version`
 band, so divergence between the three sources silently corrupts the
 record. If you're a future Claude and only one of the three looks like
@@ -204,13 +204,33 @@ this during Week 5 logging: R-001 shrinks toward the trailing-3
 base, which is stale when a position teammate has been out and
 targets have redistributed. Rather than fight R-001, R-003 replaces
 the stale base with a fresh one at the slate stage — slate.py reads
-nflreadpy's weekly injury report, finds same-position teammates with
-`report_status == 'Out'` AND trailing-3 `snap_pct ≥ 0.25`, and adds
-0.4 × out-WR rec/g (receiving) or 0.6 × out-RB car/g (rushing) to
-the picked player's base. The UI and tools/calc.py then consume
-`base_car_r003` / `base_rec_r003`; R-001 shrinks toward this
-elevated base, which was the composition order the ordering was
-designed to achieve.
+nflreadpy's weekly injury report AND the weekly roster snapshot to
+find same-position teammates who are effectively out this week (see
+R-003 condition below), filters to those with trailing-3 `snap_pct
+≥ 0.25`, and adds 0.4 × out-WR rec/g (receiving) or 0.6 × out-RB
+car/g (rushing) to the picked player's base. The UI and tools/calc.py
+then consume `base_car_r003` / `base_rec_r003`; R-001 shrinks toward
+this elevated base, which was the composition order the ordering
+was designed to achieve.
+
+**Wednesday Oct 14 amendment (R-003b):** Chris identified during the
+Week 6 Thursday-prep that R-003 as originally shipped only consulted
+the weekly injury report (`report_status == 'Out'`), which misses
+players on IR / Reserve — those come off the weekly injury report
+once they're placed. Concrete case: Jadarian Price started Weeks
+1-3 for SEA, went Out in Week 4, moved to Reserve in Week 5. Emanuel
+Wilson's Week 6 trailing-3 (16.7 car/g) still included Price's
+committee games. R-003 as shipped did not fire for Wilson because
+Price was no longer on the Week 6 injury report. The trigger was
+expanded to the **union** of two signals:
+  - `report_status == 'Out'` on the week's injury report, OR
+  - `status != 'ACT'` on the week's `load_rosters_weekly` snapshot
+    (catches RES/IR, INA, PUP, CUT, TRD, EXE, DEV, RET).
+Inheritance rates (0.4 / 0.6), the ≥ 0.25 snap filter, and the
+composition order are unchanged. METH_VER bumped from
+`W6-R001-R002-R003` to `W6-R001-R002-R003b`; no Week 6 rows had
+been logged under the original tag, so no methodology-version split
+is introduced into the record.
 
 **Backtest.** `validate.py --mode brier` was run against 2023, 2024,
 and 2025 (540-582 synthetic props per season; line = `round(2 ×
@@ -239,7 +259,9 @@ literally that drops all three variants on rounding dust (r002:
 2023. The honest reading is that the combined "all" variant has
 the best mean improvement (+0.0019), is never meaningfully negative
 in any season, and the R-003 2023 miss is washed out by R-002's
-2023 win. Both rules ship together as `W6-R001-R002-R003`. The
+2023 win. Both rules ship together as `W6-R001-R002-R003` (and
+after the Wednesday Oct 14 trigger-expansion amendment, as
+`W6-R001-R002-R003b` — no logged rows carry the original tag). The
 strict-policy variant (drop R-003, bump to `W6-R001-R002`) was
 considered and rejected on the grounds that the combined variant
 dominates it on mean delta and matches it on worst-season delta.
@@ -256,7 +278,7 @@ Policy relaxation itself is documented here as part of the record.
 
 ## Week 6 — the current strategy
 
-**Version tag:** `W6-R001-R002-R003`. Rows logged from Week 6 forward
+**Version tag:** `W6-R001-R002-R003b`. Rows logged from Week 6 forward
 carry this in `methodology_version`. Weeks 3–5 keep their original
 tags (`W3` for Week 3, `W4-R001` for Weeks 4 and 5) and are scored
 under their own methodology.
@@ -424,12 +446,20 @@ backtest:    2023 +0.0032, 2024 +0.0006, 2025 −0.0001 Brier delta
              codification decision.
 ```
 
-### R-003 — teammate-injury base elevation  (added 2026-10-10, active Week 6)
+### R-003 — teammate-injury base elevation  (added 2026-10-10, active Week 6; trigger expanded 2026-10-14 → R-003b)
 
 ```
-condition:   a same-position teammate on the player's team has
-             report_status == 'Out' for the upcoming week AND their
-             trailing-3-game snap_pct >= 0.25.
+condition:   a same-position teammate on the player's team is
+             EFFECTIVELY OUT for the upcoming week AND their
+             trailing-3-game snap_pct >= 0.25. "Effectively out" is
+             the UNION of two signals (introduced in the R-003b
+             amendment to cover IR cases that fall off the weekly
+             injury report):
+               (a) report_status == 'Out' on the week's injury report
+                   (short-term game-time designations), OR
+               (b) status != 'ACT' on the week's load_rosters_weekly
+                   snapshot (catches RES/IR, INA, PUP, CUT, TRD, DEV,
+                   EXE, RET — season-ending or multi-week moves).
 applies to:  both
 effect:      base is replaced with an elevated base BEFORE the
              formula runs:
@@ -466,17 +496,26 @@ threshold:   The ≥ 0.25 trailing-3 snap_pct requirement filters out
              a scrub-RB going Out from artificially elevating the
              starter — a 4%-snap backup doesn't actually cede volume
              to the lead back when he's inactive.
-scope:       Trigger is report_status == 'Out' ONLY. Doubtful and
-             Questionable don't fire (confirmed in planning). This
-             matches how sportsbooks reliably move lines on known-
-             inactive players but not on probability-of-play reports.
+scope:       Trigger is 'Out' on the injury report OR non-'ACT' on the
+             weekly roster (R-003b). Doubtful and Questionable do not
+             fire — those are probability-of-play reports, not known
+             inactives, and sportsbooks reliably move lines only on
+             known-inactive players. The R-003b expansion added IR /
+             Reserve coverage because those designations come off the
+             weekly injury report, so they would otherwise be invisible
+             to R-003.
 backtest:    2023 −0.0013, 2024 +0.0027, 2025 +0.0002 Brier delta vs
              baseline (synthetic-line proxy). In isolation this fails
              the strict codification policy on 2023; however, when
              combined with R-002 the 2023 loss is washed out (combined
              delta +0.0020 on 2023) and the combined "all" variant has
              the best mean improvement of any variant (+0.0019).
-             Shipped jointly with R-002 under `W6-R001-R002-R003`.
+             Shipped jointly with R-002 under `W6-R001-R002-R003`
+             (then `W6-R001-R002-R003b` after the Oct 14 trigger
+             expansion; backtest numbers above are for the original
+             injury-report-only trigger — R-003b catches strictly
+             more cases, so the direction of effect is unchanged but
+             re-backtesting against the expanded trigger is pending).
              See the "Between Week 5 and Week 6" section for the full
              table and the codification rationale.
 ```

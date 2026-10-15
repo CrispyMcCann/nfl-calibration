@@ -32,7 +32,7 @@ import math
 import sys
 
 # Constants — must match METHODOLOGY.md Week 6 AND ui.html's METHODOLOGY block.
-METH_VER = "W6-R001-R002-R003"
+METH_VER = "W6-R001-R002-R003b"
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
 SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}
 SHRINK_FACTOR = 0.5

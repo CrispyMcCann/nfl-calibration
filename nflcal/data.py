@@ -49,6 +49,49 @@ def _injuries(season: int) -> pd.DataFrame:
     return nfl.load_injuries([season]).to_pandas()
 
 
+@functools.lru_cache(maxsize=8)
+def _rosters_weekly(season: int) -> pd.DataFrame:
+    return nfl.load_rosters_weekly([season]).to_pandas()
+
+
+def _effectively_out(season: int, week: int, team: str,
+                     position: str) -> dict[str, str]:
+    """Players on `team` at `position` who will not play `week`.
+
+    Union of two signals, because the weekly injury report doesn't cover
+    season-ending moves:
+      - injury report `report_status == 'Out'` for `week` (week-to-week
+        designations)
+      - weekly roster `status != 'ACT'` for `week` (RES/IR, INA, PUP, CUT,
+        TRD, etc. — anyone not on the active roster for this specific week)
+
+    Returns {player_name: reason_tag}; reason_tag is `'Out'` or the roster
+    status abbreviation. The caller uses the tag only for audit strings.
+    """
+    out: dict[str, str] = {}
+    try:
+        inj = _injuries(season)
+        inj_hit = inj[(inj.week == week) & (inj.team == team)
+                      & (inj.position == position)
+                      & (inj.report_status == "Out")]
+        for name in inj_hit.full_name.dropna().astype(str):
+            out[name] = "Out"
+    except Exception:
+        pass
+    try:
+        rw = _rosters_weekly(season)
+        rw_hit = rw[(rw.week == week) & (rw.team == team)
+                    & (rw.position == position)
+                    & (rw.status != "ACT")]
+        for _, row in rw_hit.iterrows():
+            name = str(row.full_name)
+            if name not in out:
+                out[name] = str(row.status)
+    except Exception:
+        pass
+    return out
+
+
 def _allowed(season: int, through_week: int | None = None) -> pd.DataFrame:
     """Per-team defensive numbers: what each team GAVE UP, per game.
 
@@ -246,11 +289,8 @@ def primary_at(season: int, through_week: int, team: str,
 
     out_names: set[str] = set()
     if exclude_out_week is not None:
-        inj = _injuries(season)
-        out_rows = inj[(inj.week == exclude_out_week) & (inj.team == team)
-                       & (inj.position == position)
-                       & (inj.report_status == "Out")]
-        out_names = set(out_rows.full_name.dropna().astype(str))
+        out_names = set(_effectively_out(season, exclude_out_week,
+                                         team, position).keys())
 
     u = u[~u.player_display_name.isin(out_names)]
     if u.empty:
@@ -305,12 +345,17 @@ def elevation_r003(season: int, week: int, team: str, position: str,
     """R-003 base elevation. Returns the pre- or post-elevation base plus
     an audit note.
 
-    Fires when a same-position teammate on `team` has `report_status == 'Out'`
+    Fires when a same-position teammate on `team` is **effectively out**
     for `week` AND their trailing-3 snap share was ≥ 25% (so a scrub-RB
-    going out does not elevate the starter artificially). `exclude_player`
-    (the player we're predicting for) is removed from the out-list first,
-    so a WR1 picked as the queue slot does not elevate herself when the
-    picker already fell back past her.
+    going out does not elevate the starter artificially). "Effectively
+    out" is the union of two signals (see `_effectively_out`):
+      - injury report `report_status == 'Out'` for `week` (short-term)
+      - weekly roster `status != 'ACT'` for `week` (IR / Reserve / Inactive
+        / Trade / Cut — captures season-ending moves that fall off the
+        weekly injury report).
+    `exclude_player` (the player we're predicting for) is removed from the
+    out-list first, so a WR1 picked as the queue slot does not elevate
+    herself when the picker already fell back past her.
 
     Inheritance rate is position-specific:
       WR : base_rec += 0.4 × sum(out_teammate.rec/g)
@@ -318,16 +363,13 @@ def elevation_r003(season: int, week: int, team: str, position: str,
 
     Returns {"base_rec", "base_car", "fires", "notes"}.
     """
-    inj = _injuries(season)
-    out = inj[(inj.week == week) & (inj.team == team)
-             & (inj.position == position)
-             & (inj.report_status == "Out")]
+    out_map = _effectively_out(season, week, team, position)
     if exclude_player is not None:
-        out = out[out.full_name != exclude_player]
+        out_map.pop(exclude_player, None)
     quiet = {"base_rec": round(float(base_rec or 0), 2),
              "base_car": round(float(base_car or 0), 2),
              "fires": False, "notes": ""}
-    if out.empty:
+    if not out_map:
         return quiet
 
     u = usage(season, week - 1, team)
@@ -335,22 +377,23 @@ def elevation_r003(season: int, week: int, team: str, position: str,
         return quiet
 
     rec_add, car_add, notes = 0.0, 0.0, []
-    for _, row in out.iterrows():
-        hit = u[(u.player_display_name == row.full_name)
+    for name, reason in out_map.items():
+        hit = u[(u.player_display_name == name)
                 & (u.position == position)]
         if hit.empty:
             continue
         r = hit.iloc[0]
         if float(r.snap_pct or 0) < 0.25:
             continue
+        tag = "OUT" if reason == "Out" else f"OUT ({reason})"
         if position == "WR":
             rec_val = float(r.rec or 0)
             rec_add += 0.4 * rec_val
-            notes.append(f"{row.full_name} OUT; +0.4 × {rec_val:.1f} rec/g")
+            notes.append(f"{name} {tag}; +0.4 × {rec_val:.1f} rec/g")
         elif position == "RB":
             car_val = float(r.car or 0)
             car_add += 0.6 * car_val
-            notes.append(f"{row.full_name} OUT; +0.6 × {car_val:.1f} car/g")
+            notes.append(f"{name} {tag}; +0.6 × {car_val:.1f} car/g")
 
     if not notes:
         return quiet
