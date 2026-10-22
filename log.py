@@ -49,6 +49,17 @@ FIELDS = [
     "primary_depth",
     "pass_def_rank_opp", "rush_def_rank_opp",
     "base_rec_r003", "base_car_r003", "r003_fires", "r003_notes",
+    # W7 additions. Position-specific pass/rush ranks for both offense
+    # and defense on both the predicted team ('own_*') and the opponent
+    # ('*_opp'). 1 = best in that category. These feed the UI readout —
+    # Vegas lines already price these in, so they aren't formula inputs,
+    # just honest attribution of what context informed a prediction.
+    # pass_def_rank_opp and rush_def_rank_opp (above) remain the R-002
+    # formula inputs; the four new 'own_*' fields and two new 'off_rank_opp'
+    # fields are UI-side readout only.
+    "own_pass_def_rank", "own_rush_def_rank",
+    "own_pass_off_rank", "own_rush_off_rank",
+    "pass_off_rank_opp", "rush_off_rank_opp",
 ]
 
 

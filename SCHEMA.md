@@ -17,7 +17,7 @@ with `NaN` on merge.
 
 ## Column order and types
 
-**56 columns, in this exact order.** Do not reorder; downstream tools
+**62 columns, in this exact order.** Do not reorder; downstream tools
 (and human readers of the CSV) rely on it. New columns go at the end
 of the appropriate semantic group (identifiers, mechanism, prediction,
 price, controls, audit, formula audit, outcome).
@@ -145,6 +145,26 @@ these columns.
 | 55 | `r003_fires` | bool-as-string | `True` if R-003 elevated the base this row. |
 | 56 | `r003_notes` | string | audit string naming the out teammate(s) and the inherited volume, e.g. `"DeVonta Smith OUT; +0.4 × 8.0 rec/g"`. Empty when R-003 doesn't fire. |
 
+### Rank audit (6) — position-specific pass/rush ranks for both teams
+
+Appended at positions 57–62 for the W7 UI readout. 1 = best in that
+category. These are **not** formula inputs (R-002 reads
+`pass_def_rank_opp` and `rush_def_rank_opp` from the W6 block above —
+those stay the formula's inputs). The six fields here are the UI's
+rank readout for human judgement, kept on the row for honest
+attribution of what context informed a prediction. The Vegas line
+already prices these in, so weighing them explicitly on top of the
+market risks double-counting.
+
+| # | column | type | notes |
+|---|---|---|---|
+| 57 | `own_pass_def_rank` | int 1–32 | shrunk `pass_epa_allowed_rank` of the team the prediction is about |
+| 58 | `own_rush_def_rank` | int 1–32 | shrunk `rush_epa_allowed_rank` of the team the prediction is about |
+| 59 | `own_pass_off_rank` | int 1–32 | shrunk `pass_epa_gained_rank` of the team the prediction is about |
+| 60 | `own_rush_off_rank` | int 1–32 | shrunk `rush_epa_gained_rank` of the team the prediction is about |
+| 61 | `pass_off_rank_opp` | int 1–32 | shrunk `pass_epa_gained_rank` of the opponent |
+| 62 | `rush_off_rank_opp` | int 1–32 | shrunk `rush_epa_gained_rank` of the opponent |
+
 ---
 
 ## Row types
@@ -183,12 +203,12 @@ UI when a queued prop is skipped. Never hand-edit `outcome`.
 
 | writer | new rows | existing rows |
 |---|---|---|
-| UI (queue) | all columns 1–41, 47–49, and 50–56 (methodology computes 47–49 at log time; 50–56 are carried from the slate stub) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
-| UI (manual) | columns 1–41, 47–49, and 50–56 where the slate provides them | same |
-| UI (skip) | columns 1–14, 29–41, 50–56, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
-| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–56 left blank (CLI has no methodology integration) | never |
+| UI (queue) | all columns 1–41, 47–49, 50–56, and 57–62 (methodology computes 47–49 at log time; 50–56 and 57–62 are carried from the slate stub) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
+| UI (manual) | columns 1–41, 47–49, 50–56, and 57–62 where the slate provides them | same |
+| UI (skip) | columns 1–14, 29–41, 50–56, 57–62, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
+| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–62 left blank (CLI has no methodology integration) | never |
 | `resolve.py` | never | `actual` (44), `outcome` (45), `resolved_at` (46) |
-| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills trailing columns (47–49 and 50–56) as empty when reading a predictions.csv that pre-dates them |
+| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills trailing columns (47–49, 50–56, and 57–62) as empty when reading a predictions.csv that pre-dates them |
 | `slate.py` | never | never — read-only |
 | `score.py` | never | never — read-only |
 

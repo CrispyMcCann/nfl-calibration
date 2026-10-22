@@ -186,7 +186,6 @@
 
     <div class="step veil" id="qs2">
       <h3>Now the odds</h3>
-      <p class="hint" style="margin:0 0 10px">FanDuel layout: over on the left, under on the right. The UI swaps internally to store the price of the queued side as `odds`.</p>
       <div class="grid">
         <label><span class="lab">American odds, OVER</span><input type="number" id="qodds" step="5" placeholder="-115"></label>
         <label><span class="lab">American odds, UNDER</span><input type="number" id="qopp" step="5" placeholder="-105"></label>
@@ -836,7 +835,7 @@ function remove(r) {
 }
 
 /* ---------- csv ---------- */
-// Must match SCHEMA.md exactly. 56 columns.
+// Must match SCHEMA.md exactly. 62 columns.
 // SYNC: this list is one of three identical sources (SCHEMA.md,
 // log.py FIELDS, this). Change one -> change all three.
 const CSV_COLS = [
@@ -857,6 +856,11 @@ const CSV_COLS = [
   "primary_depth",
   "pass_def_rank_opp","rush_def_rank_opp",
   "base_rec_r003","base_car_r003","r003_fires","r003_notes",
+  // Added W7 (position-specific pass/rush ranks for both teams, both
+  // sides of the ball). UI readout only — not formula inputs.
+  "own_pass_def_rank","own_rush_def_rank",
+  "own_pass_off_rank","own_rush_off_rank",
+  "pass_off_rank_opp","rush_off_rank_opp",
 ];
 
 $("copycsv").addEventListener("click", async () => {
@@ -928,11 +932,32 @@ function showQueue() {
   $("qprog").innerHTML = `${total - left.length + 1} of ${total} · ` +
     `<span class="pill ${isControl ? "control" : "core"}">${q.tier}</span>` +
     ` hypothesis says <b>${q.expect || "over"}</b>`;
+  // Position-specific pass/rush ranks for BOTH teams. Trailing is the
+  // "worse-defense" side the mechanism picked; leading is the other.
+  // Falls back to '—' when the data layer couldn't resolve a rank
+  // (new/renamed team, early-season weird data).
+  const trailing = q.side_of_mechanism === "trailing";
+  const own_pdef = q.own_pass_def_rank, own_rdef = q.own_rush_def_rank;
+  const own_poff = q.own_pass_off_rank, own_roff = q.own_rush_off_rank;
+  const opp_pdef = q.pass_def_rank_opp, opp_rdef = q.rush_def_rank_opp;
+  const opp_poff = q.pass_off_rank_opp, opp_roff = q.rush_off_rank_opp;
+  const opp_team_name = q.game.split(" @ ").find((t) => t !== q.team) || "opp";
+  const fmt = (v) => (v == null || v === "" ? "—" : v);
+  const tr_poff = trailing ? own_poff : opp_poff;
+  const tr_roff = trailing ? own_roff : opp_roff;
+  const tr_pdef = trailing ? own_pdef : opp_pdef;
+  const tr_rdef = trailing ? own_rdef : opp_rdef;
+  const ld_poff = trailing ? opp_poff : own_poff;
+  const ld_roff = trailing ? opp_roff : own_roff;
+  const ld_pdef = trailing ? opp_pdef : own_pdef;
+  const ld_rdef = trailing ? opp_rdef : own_rdef;
+  const trail_team = trailing ? q.team : opp_team_name;
+  const lead_team  = trailing ? opp_team_name : q.team;
   $("qctx").innerHTML =
     `<span>${esc(q.game)}</span>` +
     `<span>${esc(q.team)} <b>${q.side_of_mechanism}</b></span>` +
-    `<span>own D <b>${q.own_def_rank}</b></span>` +
-    `<span>opp D <b>${q.def_rank_opp}</b></span>` +
+    `<span>trail ${esc(trail_team)} off <b>P${fmt(tr_poff)} R${fmt(tr_roff)}</b> · def <b>P${fmt(tr_pdef)} R${fmt(tr_rdef)}</b></span>` +
+    `<span>lead ${esc(lead_team)} off <b>P${fmt(ld_poff)} R${fmt(ld_roff)}</b> · def <b>P${fmt(ld_pdef)} R${fmt(ld_rdef)}</b></span>` +
     `<span>gap <b>${q.def_gap}</b></span>` +
     `<span>implied <b>${q.implied_total}</b></span>` +
     `<span>spread <b>${q.spread > 0 ? "+" : ""}${q.spread}</b></span>` +
@@ -942,7 +967,8 @@ function showQueue() {
     (q.base_rec ? `<span>rec/g <b>${q.base_rec}</b></span>` : "") +
     (q.base_car ? `<span>car/g <b>${q.base_car}</b></span>` : "") +
     (q.base_snap != null ? `<span>snaps <b>${(q.base_snap*100).toFixed(0)}%</b></span>` : "") +
-    `<span>${esc(q.roof)}</span>`;
+    `<span>${esc(q.roof)}</span>` +
+    `<span class="tiny" style="width:100%;margin-top:4px">Pass/rush ranks are shrunk EPA-allowed/-gained; 1 = best. The sportsbook line already prices these in — treat them as sanity context, not independent edge.</span>`;
   $("qou").value = q.expect || "over";
   const key = [SLATE.week, q.game, q.player, q.market].join("|");
   if (key !== QCUR) {
@@ -1107,6 +1133,9 @@ $("qskip").addEventListener("click", async () => {
     rush_def_rank_opp: q.rush_def_rank_opp,
     base_rec_r003: q.base_rec_r003, base_car_r003: q.base_car_r003,
     r003_fires: q.r003_fires, r003_notes: q.r003_notes,
+    own_pass_def_rank: q.own_pass_def_rank, own_rush_def_rank: q.own_rush_def_rank,
+    own_pass_off_rank: q.own_pass_off_rank, own_rush_off_rank: q.own_rush_off_rank,
+    pass_off_rank_opp: q.pass_off_rank_opp, rush_off_rank_opp: q.rush_off_rank_opp,
     skip_reason: reason,
     outcome: "skip", amendments: [],
   });
@@ -1169,6 +1198,9 @@ $("qlog").addEventListener("click", async () => {
     rush_def_rank_opp: q.rush_def_rank_opp,
     base_rec_r003: q.base_rec_r003, base_car_r003: q.base_car_r003,
     r003_fires: q.r003_fires, r003_notes: q.r003_notes,
+    own_pass_def_rank: q.own_pass_def_rank, own_rush_def_rank: q.own_rush_def_rank,
+    own_pass_off_rank: q.own_pass_off_rank, own_rush_off_rank: q.own_rush_off_rank,
+    pass_off_rank_opp: q.pass_off_rank_opp, rush_off_rank_opp: q.rush_off_rank_opp,
     roof: q.roof, why: whyFinal,
     outcome: "", amendments: [], skip_reason: "",
     formula_p: formulaP, formula_expected: formulaExpected,

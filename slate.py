@@ -119,8 +119,11 @@ def main():
         s = build_slate(SEASON, week, narrow=a.narrow)
         paces = D.pace(SEASON, week - 1)
         # R-002 uses position-specific defensive EPA ranks from the same
-        # shrunk ratings table that build_slate used.
+        # shrunk ratings table that build_slate used. offense_ratings is
+        # the symmetric companion used for the UI's team-strength readout
+        # (own/opp offense rank) — not consumed by the formula.
         ratings = D.defense_ratings(SEASON, through_week=week - 1)
+        off_ratings = D.offense_ratings(SEASON, through_week=week - 1)
         games, queue = [], []
         for _, g in (s.head(a.top) if a.top else s).iterrows():
             entry = {k: (v.item() if hasattr(v, "item") else v)
@@ -163,6 +166,17 @@ def main():
                     if opp_team in ratings.index else None
                 rush_rk = int(ratings.loc[opp_team, "rush_def_rank"]) \
                     if opp_team in ratings.index else None
+                # Position-specific pass/rush ranks for both teams, both
+                # sides of the ball. 1 = best. R-002 reads pass_def_rank_opp
+                # / rush_def_rank_opp; everything else is UI readout only.
+                def _get(df, team_, col):
+                    return int(df.loc[team_, col]) if team_ in df.index else None
+                own_pass_def = _get(ratings, team, "pass_def_rank")
+                own_rush_def = _get(ratings, team, "rush_def_rank")
+                own_pass_off = _get(off_ratings, team, "pass_off_rank")
+                own_rush_off = _get(off_ratings, team, "rush_off_rank")
+                pass_off_opp = _get(off_ratings, opp_team, "pass_off_rank")
+                rush_off_opp = _get(off_ratings, opp_team, "rush_off_rank")
                 # R-003 base elevation (zero-op if no same-position teammate
                 # is Out this week). Fires in the slate so the UI and
                 # tools/calc.py can read a single elevated base and the
@@ -197,7 +211,21 @@ def main():
                         "base_rec_r003": elev["base_rec"],
                         "base_car_r003": elev["base_car"],
                         "r003_fires": elev["fires"],
-                        "r003_notes": elev["notes"]}
+                        "r003_notes": elev["notes"],
+                        # --- W7 position-specific rank audit. Pass/rush
+                        # ranks on both sides of the ball for both the
+                        # predicted team and the opponent. 1 = best. The
+                        # Vegas line already prices these in — they are
+                        # UI readout for human judgement, not formula
+                        # inputs (R-002 reads pass_def_rank_opp /
+                        # rush_def_rank_opp above; nothing else here is
+                        # consumed by compute_myp).
+                        "own_pass_def_rank": own_pass_def,
+                        "own_rush_def_rank": own_rush_def,
+                        "own_pass_off_rank": own_pass_off,
+                        "own_rush_off_rank": own_rush_off,
+                        "pass_off_rank_opp": pass_off_opp,
+                        "rush_off_rank_opp": rush_off_opp}
 
             # Queue uses the depth-chart-aware picker so an injured WR1 who
             # missed the trailing-3 window does not cede the slot to a WR2

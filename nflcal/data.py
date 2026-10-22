@@ -159,6 +159,58 @@ def defense_ratings(season: int, through_week: int) -> pd.DataFrame:
     return out.sort_values("def_rank")
 
 
+def _gained(season: int, through_week: int | None = None) -> pd.DataFrame:
+    """Per-team offensive numbers: what each team GAINED, per game. Mirror
+    of _allowed, but grouped on the offense column instead of defense."""
+    ts = _team_stats(season)
+    ts = ts[ts.season_type == "REG"] if "season_type" in ts else ts
+    if through_week is not None:
+        ts = ts[ts.week <= through_week]
+    if ts.empty:
+        return pd.DataFrame()
+    g = ts.groupby("team").agg(
+        games=("week", "nunique"),
+        pass_yds_gained=("passing_yards", "mean"),
+        rush_yds_gained=("rushing_yards", "mean"),
+        pass_epa_gained=("passing_epa", "mean"),
+        rush_epa_gained=("rushing_epa", "mean"),
+    )
+    return g
+
+
+def offense_ratings(season: int, through_week: int) -> pd.DataFrame:
+    """Offensive quality, shrunk toward the prior season using the same
+    K_PRIOR_GAMES as defense_ratings. Rank 1 = best offense (most yards /
+    highest EPA gained). The composite 'off_rank' blends the two EPA
+    measures the same way def_rank does; 'pass_off_rank' / 'rush_off_rank'
+    are the position-specific aliases for UI consumption."""
+    cur = _gained(season, through_week)
+    prior = _gained(season - 1)
+
+    metrics = ["pass_yds_gained", "rush_yds_gained",
+               "pass_epa_gained", "rush_epa_gained"]
+
+    out = cur.copy()
+    n = out["games"].clip(lower=0)
+    k = K_PRIOR_GAMES
+
+    for m in metrics:
+        p = prior[m] if (not prior.empty and m in prior) else pd.Series(dtype=float)
+        p = p.reindex(out.index)
+        p = p.fillna(out[m].mean())
+        out[m] = (n * out[m] + k * p) / (n + k)
+
+    # Rank 1 = highest value (best offense), ascending=False.
+    for m in metrics:
+        out[m + "_rank"] = out[m].rank(method="min", ascending=False).astype(int)
+
+    out["off_score"] = (out["pass_epa_gained_rank"] + out["rush_epa_gained_rank"]) / 2
+    out["off_rank"] = out["off_score"].rank(method="min").astype(int)
+    out["pass_off_rank"] = out["pass_epa_gained_rank"]
+    out["rush_off_rank"] = out["rush_epa_gained_rank"]
+    return out.sort_values("off_rank")
+
+
 def implied_totals(spread_line: float, total_line: float) -> tuple[float, float]:
     """(home_implied_points, away_implied_points).
 
