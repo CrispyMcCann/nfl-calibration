@@ -1075,12 +1075,24 @@ function recomputeFormula() {
   const fired = r.r001Fired
     ? `<span style="color:var(--warn)">R-001 fired · shrunk ${r.rawExpected} → ${r.expected}</span>`
     : `<span>R-001 skipped (|dev|=${Math.abs(r.deviation).toFixed(2)})</span>`;
-  // R-003 fires in the slate; the UI reports it from the queue stub flag.
+  // R-003 and R-006 both fire in the slate; the UI reports them from
+  // the queue stub flags. R-003 shows the raw → elevated step; R-006
+  // shows the elevated → blended step so the composition is visible.
+  const rawBase = (q.market === "rush_attempts" ? q.base_car : q.base_rec);
+  const r003Base = (q.market === "rush_attempts" ? q.base_car_r003 : q.base_rec_r003);
   const r003 = q.r003_fires
-    ? `<span style="color:var(--warn)">R-003 fired · base ${(q.market==="rush_attempts"?q.base_car:q.base_rec).toFixed(2)} → ${base.toFixed(2)}</span>`
+    ? `<span style="color:var(--warn)">R-003 fired · base ${Number(rawBase).toFixed(2)} → ${Number(r003Base).toFixed(2)}</span>`
+    : "";
+  const r006 = q.r006_fires
+    ? `<span style="color:var(--warn)">R-006 fired · base ${Number(r003Base).toFixed(2)} → ${Number(base).toFixed(2)}</span>`
     : "";
   const r002 = r.r002Fired
     ? `<span style="color:var(--warn)">R-002 fired · matchup ${r.matchupAdjust>=0?"+":""}${r.matchupAdjust}</span>`
+    : "";
+  // R-005 fires when base × SIGMA_SCALE exceeds the market floor —
+  // i.e., the sigma shown is wider than the pre-W7 constant.
+  const r005 = r.r005Scaled
+    ? `<span style="color:var(--warn)">R-005 scaled · σ ${SIGMA[marketKey(q.market)]} → ${r.sigma}</span>`
     : "";
   const overrideFlag = Number.isFinite(override)
     ? `<span style="color:var(--warn)">mean override</span>` : "";
@@ -1092,7 +1104,7 @@ function recomputeFormula() {
     `<span>expected <b class="big">${r.expected}</b></span>` +
     `<span>σ <b class="big">${r.sigma}</b></span>` +
     `<span>formula my_p <b class="big">${r.formulaP.toFixed(4)}</b></span>` +
-    r003 + r002 + fired + overrideFlag + divergedFlag +
+    r003 + r006 + r002 + r005 + fired + overrideFlag + divergedFlag +
     `<span style="color:var(--ink-faint)">(${METH_VER})</span>`;
 }
 
