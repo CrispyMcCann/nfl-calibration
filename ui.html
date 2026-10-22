@@ -296,7 +296,7 @@ const nowISO = () => new Date().toISOString();
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
 
-/* === METHODOLOGY :: W6-R001-R002-R003b ================================
+/* === METHODOLOGY :: W7-R001-R002-R003b-R005-R006 ======================
  * SYNC CONTRACT. The weekly probability formula lives in three places
  * that must stay IDENTICAL:
  *   1. METHODOLOGY.md — authoritative statement of the formula
@@ -317,7 +317,7 @@ function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
  * The erf is Abramowitz & Stegun 7.1.26, chosen to match math.erf used
  * by tools/calc.py. estimateProb mirrors tools/calc.py.one_prop exactly.
  * ======================================================================= */
-const METH_VER = "W6-R001-R002-R003b";
+const METH_VER = "W7-R001-R002-R003b-R005-R006";
 const SIGMA = { rushing: 5.5, receiving: 2.5 };
 const SHRINK_THRESHOLD = { rushing: 3.0, receiving: 1.5 };
 const SHRINK_FACTOR = 0.5;
@@ -325,6 +325,11 @@ const SHRINK_FACTOR = 0.5;
 const MATCHUP_BUMP = { rushing: 1.0, receiving: 0.5 };
 const MATCHUP_WORST_K = 8;
 const MATCHUP_BEST_K = 8;
+// R-005: variable-sigma scaling. sigma_eff = max(SIGMA[market], base × k).
+// Floor binds for low-base props; scaling widens the distribution on
+// high-base props so the formula is less confident when the base is
+// extreme. Value from empirical variance/base ratio for WR/RB stats.
+const SIGMA_SCALE = 0.30;
 
 function erf(x) {
   const sign = x < 0 ? -1 : 1;
@@ -371,7 +376,10 @@ function estimateProb({ market, side, base, pace, usageFactor,
   const r002 = matchupAdjustR002(market, passRankOpp, rushRankOpp);
   const ma = Number.isFinite(matchupOverride) ? matchupOverride : r002;
   const mk = marketKey(market);
-  const sigma = SIGMA[mk];
+  const sigmaFloor = SIGMA[mk];
+  // R-005: variable sigma scales with base. Floor binds for low-base
+  // props; scale binds for high-base ones. Codified for W7.
+  const sigma = Math.max(sigmaFloor, base * SIGMA_SCALE);
   const threshold = SHRINK_THRESHOLD[mk];
   const raw = base * (pace / 60) * uf + ma;
   const dev = raw - base;
@@ -388,8 +396,9 @@ function estimateProb({ market, side, base, pace, usageFactor,
     deviation: Number(dev.toFixed(3)),
     r001Fired: fired,
     r002Fired: ma !== 0,
+    r005Scaled: sigma > sigmaFloor + 1e-9,
     matchupAdjust: Number(ma.toFixed(3)),
-    sigma,
+    sigma: Number(sigma.toFixed(3)),
   };
 }
 /* === /METHODOLOGY ====================================================== */
@@ -595,15 +604,18 @@ $("save").addEventListener("click", async () => {
               methodology_version: prev.methodology_version },
     }]);
     // Recompute formula_p under the current methodology using the row's
-    // base/pace and the amendment's new line. Prefer R-003-elevated base
-    // if the row carries it (W6+ logs); fall back to the raw base for
-    // older rows. R-002 picks up the opposing defense's position-specific
-    // rank if the row carries it.
+    // base/pace and the amendment's new line. Prefer the fully-composed
+    // base (post-R-003 post-R-006 = base_*_r006, W7+); fall back to
+    // post-R-003 (base_*_r003, W6); then raw (older rows). R-002 picks
+    // up the opposing defense's position-specific rank if the row has it.
+    const baseR006 = prev.market === "rush_attempts"
+      ? parseFloat(prev.base_car_r006) : parseFloat(prev.base_rec_r006);
     const baseR003 = prev.market === "rush_attempts"
       ? parseFloat(prev.base_car_r003) : parseFloat(prev.base_rec_r003);
     const baseRaw = prev.market === "rush_attempts"
       ? parseFloat(prev.base_car) : parseFloat(prev.base_rec);
-    const base = Number.isFinite(baseR003) ? baseR003 : baseRaw;
+    const base = Number.isFinite(baseR006) ? baseR006
+                : Number.isFinite(baseR003) ? baseR003 : baseRaw;
     const pace = parseFloat(prev.pace);
     const r = Number.isFinite(base) && Number.isFinite(pace)
       ? estimateProb({ market: prev.market, side: prev.side || prev.expect,
@@ -629,10 +641,12 @@ $("save").addEventListener("click", async () => {
     const id = Math.random().toString(36).slice(2, 12);
     // Manual rows: formula audit is best-effort. If the loaded slate has
     // base/pace for this player, we can compute; otherwise leave blank.
-    // Prefer R-003-elevated base when the slate exposed it.
+    // Prefer R-006-blended base, then R-003 elevated, then raw.
+    const baseR006 = v.market === "rush_attempts" ? v.base_car_r006 : v.base_rec_r006;
     const baseR003 = v.market === "rush_attempts" ? v.base_car_r003 : v.base_rec_r003;
     const baseRaw  = v.market === "rush_attempts" ? v.base_car      : v.base_rec;
-    const base = Number.isFinite(baseR003) ? baseR003 : baseRaw;
+    const base = Number.isFinite(baseR006) ? baseR006
+                : Number.isFinite(baseR003) ? baseR003 : baseRaw;
     const r = Number.isFinite(base) && Number.isFinite(v.pace)
       ? estimateProb({ market: v.market, side: v.side,
                        base, pace: v.pace, usageFactor: 1.0, line: v.line,
@@ -835,7 +849,7 @@ function remove(r) {
 }
 
 /* ---------- csv ---------- */
-// Must match SCHEMA.md exactly. 62 columns.
+// Must match SCHEMA.md exactly. 66 columns.
 // SYNC: this list is one of three identical sources (SCHEMA.md,
 // log.py FIELDS, this). Change one -> change all three.
 const CSV_COLS = [
@@ -861,6 +875,10 @@ const CSV_COLS = [
   "own_pass_def_rank","own_rush_def_rank",
   "own_pass_off_rank","own_rush_off_rank",
   "pass_off_rank_opp","rush_off_rank_opp",
+  // Added W7 R-006 audit (small-N blend of trailing-3 base toward season
+  // avg when the player missed games). base_*_r006 is the FORMULA INPUT
+  // for W7+ rows; r006_fires/_notes are audit-only.
+  "base_rec_r006","base_car_r006","r006_fires","r006_notes",
 ];
 
 $("copycsv").addEventListener("click", async () => {
@@ -1002,12 +1020,15 @@ function recomputeFormula() {
   const q = left[QI];
   const line = parseFloat($("qline").value);
   if (!Number.isFinite(line)) return;
-  // R-003 elevated base is already baked into base_rec_r003 / base_car_r003
-  // by slate.py. Legacy queues without the _r003 fields fall through to
-  // the raw base_car / base_rec so old slates still work.
+  // W7 composition: slate.py applies R-003 then R-006 blend. The queue
+  // stub emits base_*_r006 as the post-composition base the formula
+  // consumes. Legacy slates without the newer fields fall through to
+  // base_*_r003 (W6) or raw base_* (pre-W6).
+  const baseR006 = q.market === "rush_attempts" ? q.base_car_r006 : q.base_rec_r006;
   const baseR003 = q.market === "rush_attempts" ? q.base_car_r003 : q.base_rec_r003;
   const baseRaw  = q.market === "rush_attempts" ? q.base_car      : q.base_rec;
-  const base = Number.isFinite(baseR003) ? baseR003 : baseRaw;
+  const base = Number.isFinite(baseR006) ? baseR006
+              : Number.isFinite(baseR003) ? baseR003 : baseRaw;
   const override = parseFloat($("qexpected").value);
   // If user supplied a mean override, treat it as raw_expected. Otherwise
   // compute from the queue's base × pace (with R-002 picked up from the
@@ -1136,6 +1157,8 @@ $("qskip").addEventListener("click", async () => {
     own_pass_def_rank: q.own_pass_def_rank, own_rush_def_rank: q.own_rush_def_rank,
     own_pass_off_rank: q.own_pass_off_rank, own_rush_off_rank: q.own_rush_off_rank,
     pass_off_rank_opp: q.pass_off_rank_opp, rush_off_rank_opp: q.rush_off_rank_opp,
+    base_rec_r006: q.base_rec_r006, base_car_r006: q.base_car_r006,
+    r006_fires: q.r006_fires, r006_notes: q.r006_notes,
     skip_reason: reason,
     outcome: "skip", amendments: [],
   });
@@ -1201,6 +1224,8 @@ $("qlog").addEventListener("click", async () => {
     own_pass_def_rank: q.own_pass_def_rank, own_rush_def_rank: q.own_rush_def_rank,
     own_pass_off_rank: q.own_pass_off_rank, own_rush_off_rank: q.own_rush_off_rank,
     pass_off_rank_opp: q.pass_off_rank_opp, rush_off_rank_opp: q.rush_off_rank_opp,
+    base_rec_r006: q.base_rec_r006, base_car_r006: q.base_car_r006,
+    r006_fires: q.r006_fires, r006_notes: q.r006_notes,
     roof: q.roof, why: whyFinal,
     outcome: "", amendments: [], skip_reason: "",
     formula_p: formulaP, formula_expected: formulaExpected,

@@ -458,6 +458,34 @@ def elevation_r003(season: int, week: int, team: str, position: str,
     }
 
 
+def season_avg(season: int, player: str, through_week: int,
+                market: str) -> float | None:
+    """R-006 helper. Season-to-date mean of a player's stat across all
+    games they actually played through `through_week`. Returns None if
+    no games on record. 'market' is 'rushing' or 'receiving' (the two
+    the formula consumes); yards markets are not modelled here.
+    This is the stable prior that R-006 blends the thin trailing-3
+    base toward when the player missed games in the trailing window."""
+    ps = _player_stats(season)
+    hit = ps[(ps.player_display_name == player) & (ps.week <= through_week)]
+    if hit.empty:
+        return None
+    col = hit.carries if market == "rushing" else hit.receptions
+    return float(col.mean())
+
+
+def blend_small_n(base: float, season_avg_: float | None, gms: int) -> float:
+    """R-006 blend. When `gms < 3` (player missed games in the trailing-3
+    window), weight-blend the thin trailing base against the season
+    average. Weight on trailing = gms/3, so gms=2 → 2/3 trailing + 1/3
+    season, gms=1 → 1/3 trailing + 2/3 season. gms≥3 is a no-op; a
+    missing season_avg_ (first-game players, rookies) also no-ops."""
+    if gms >= 3 or season_avg_ is None:
+        return float(base or 0)
+    w = max(gms, 0) / 3.0
+    return w * float(base or 0) + (1.0 - w) * float(season_avg_)
+
+
 def upcoming(season: int, week: int) -> pd.DataFrame:
     s = _schedules(season)
     return s[(s.week == week)].copy()

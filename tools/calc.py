@@ -31,8 +31,8 @@ from __future__ import annotations
 import math
 import sys
 
-# Constants — must match METHODOLOGY.md Week 6 AND ui.html's METHODOLOGY block.
-METH_VER = "W6-R001-R002-R003b"
+# Constants — must match METHODOLOGY.md Week 7 AND ui.html's METHODOLOGY block.
+METH_VER = "W7-R001-R002-R003b-R005-R006"
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
 SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}
 SHRINK_FACTOR = 0.5
@@ -43,6 +43,14 @@ SHRINK_FACTOR = 0.5
 MATCHUP_BUMP = {"rushing": 1.0, "receiving": 0.5}
 MATCHUP_WORST_K = 8
 MATCHUP_BEST_K = 8
+
+# R-005: variable-sigma scaling. sigma_eff = max(SIGMA[market], base × k).
+# For a slot WR (base ~5), the SIGMA floor binds. For a WR1 on a hot
+# stretch (base ~13), sigma scales up (13 × 0.30 = 3.9), which widens the
+# distribution and softens the formula's over-confidence on high-base
+# props — the Nacua Week 6 class of case. Value chosen from first-principle
+# empirical variance/base ratio across the backtested seasons.
+SIGMA_SCALE = 0.30
 
 
 def phi(z: float) -> float:
@@ -157,8 +165,8 @@ def one_prop() -> None:
                  choices=("rushing", "receiving", "r", "rec"))
     market = "rushing" if market in ("rushing", "r") else "receiving"
     side = ask("side (over/under)", str.lower, choices=("over", "under"))
-    base = ask("base (R-003 elevated base from queue: "
-               "base_car_r003 for rushing, base_rec_r003 for receiving)", float)
+    base = ask("base (post-R-003 post-R-006 base from queue: "
+               "base_car_r006 for rushing, base_rec_r006 for receiving)", float)
     pace = ask("pace (team plays/game from queue)", float)
     usage_factor = ask("usage_factor", float, default=1.0)
     pass_rank_opp = ask("pass_def_rank_opp (1=best D, blank if unknown)",
@@ -167,16 +175,18 @@ def one_prop() -> None:
                         _opt_int, default=None)
     line = ask("line (FanDuel)", float)
 
-    sigma = SIGMA[market]
+    sigma = result["sigma_eff"]
     threshold = SHRINK_THRESHOLD[market]
 
     # Composition: R-003 is already baked into `base` (user typed the
-    # elevated value from the queue). R-002 populates matchup_adjust.
-    # Formula then runs, and R-001 shrinks against the (fresh) base.
+    # queue's base_*_r006 value, which is R-003 then R-006 blended).
+    # R-002 populates matchup_adjust. Formula then runs with R-005's
+    # sigma scaling, and R-001 shrinks against the (fresh) base.
     result = compute_myp(market, side, base, pace, line,
                          pass_rank_opp=pass_rank_opp,
                          rush_rank_opp=rush_rank_opp,
-                         usage_factor=usage_factor)
+                         usage_factor=usage_factor,
+                         sigma_scale=SIGMA_SCALE)
     matchup_adjust = result["matchup_adjust"]
     raw_expected = result["raw_expected"]
     deviation = result["deviation"]

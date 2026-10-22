@@ -30,7 +30,7 @@ The formula below lives in three places that **must stay identical**:
 
 **Change any of them → change all three in the same commit, and bump
 `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`;
-current: `W6-R001-R002-R003b`). Rows logged under the old tag keep it. New rows get
+current: `W7-R001-R002-R003b-R005-R006`). Rows logged under the old tag keep it. New rows get
 the new tag. The write-up splits calibration by `methodology_version`
 band, so divergence between the three sources silently corrupts the
 record. If you're a future Claude and only one of the three looks like
@@ -276,18 +276,162 @@ Policy relaxation itself is documented here as part of the record.
 
 ---
 
-## Week 6 — the current strategy
+## Between Week 6 and Week 7 — what changed and why
 
-**Version tag:** `W6-R001-R002-R003b`. Rows logged from Week 6 forward
-carry this in `methodology_version`. Weeks 3–5 keep their original
-tags (`W3` for Week 3, `W4-R001` for Weeks 4 and 5) and are scored
-under their own methodology.
+Week 6 scored poorly (Brier 0.2711 vs market 0.2484 across 88
+cumulative rows). About half the deficit was one row: Puka Nacua
+UNDER 7.5 receptions logged at `my_p = 0.02` (clamped). That value
+was the formula's honest output given the inputs — Nacua's
+trailing-3 base of 13.0 fed through pace-adjustment, R-002, and
+R-001 and landed at `z = −2.7`. The weak link turned out to be the
+INPUTS, not the formula arithmetic.
 
-**Composition order.** Three rules now stack. They are composed in a
+Two things broke on the Nacua row and both have back-pressure fixes:
+
+**1. The trailing-3 base was an average of 2 games, not 3.** Nacua
+was inactive weeks 2-3, played weeks 1, 4, 5. `usage()` divides by
+games actually played, so his trailing-3 base = (9 + 17) / 2 = 13.0,
+weighted heavily by a 17-target monster game right before the slate
+was built. His season-to-date average across all 3 played games was
+10.3. The thin denominator and high-variance recent sample compounded.
+
+**2. σ = 2.5 is too tight for a WR with base 13.** Game-to-game
+variance in receptions scales with workload — a 4-rec/g slot WR has
+~2 rec variance, a 13-rec/g WR1 has 4-5. Keeping σ constant made the
+formula overconfident whenever the base drifted high.
+
+Two candidate rules addressed these — R-005 and R-006 — raised
+2026-10-18 and deferred for backtest. The backtest ran against 2023,
+2024, and 2025 (~540-580 synthetic props per season); both passed
+strict policy against the current W6 methodology:
+
+```
+Brier delta vs W6-R001-R002-R003b (positive = variant improved calibration):
+variant         2023      2024      2025      worst     mean
++ R-005         +0.0017   +0.0015   +0.0016   +0.0015   +0.0016
++ R-006         +0.0013   +0.0019   +0.0038   +0.0013   +0.0023
++ R-005 + R-006 +0.0027   +0.0031   +0.0051   +0.0027   +0.0036
+```
+
+Zero negatives anywhere. The combined variant dominates both single
+variants on worst-season AND mean. Both rules ship together as
+`W7-R001-R002-R003b-R005-R006`.
+
+A σ_scale sweep probed 0.20 through 1.00 and showed the delta
+continues to grow with σ, but that is a regression-to-0.5 artifact
+(large σ pulls predictions toward the mean, which saves bad-call
+cost but destroys good-call signal). SIGMA_SCALE = 0.30 is the honest
+first-principles choice (empirical variance/base ratio for WR/RB
+stats); larger values would be backtest-fitting.
+
+**R-004 (cross-position inheritance for receiving props) remains
+deferred** — a candidate from 2026-10-14 awaiting its own backtest.
+Not shipped in W7 for lack of implementation time; still worth
+testing when the next backtest window opens.
+
+Nacua recompute under W7 methodology (same inputs):
+```
+base_rec     = 13.0 trailing, gms=2, season_avg = 10.3
+R-006 blend  : (2/3)*13.0 + (1/3)*10.3 = 12.1
+R-003        : no out WR teammate, no change
+base_r006    = 12.1
+raw_expected = 12.1 × (69.4/60) × 1.0 + 0.5 (R-002) = 14.5
+R-001 fires  : expected = 12.1 + 0.5 × (14.5 − 12.1) = 13.3
+σ_eff        = max(2.5, 12.1 × 0.30) = 3.63   ← R-005
+z            = (7.5 − 13.3) / 3.63 = −1.60
+p_under      = 0.055                           ← no longer clamped
+```
+
+Still a bold call. No longer at the floor. If Nacua went over, Brier
+0.003 instead of 0.023. If he went under (as he did), Brier 0.893
+instead of 0.9604. Both honestly less confident.
+
+**What is NOT on the record.** No change to:
+- the game-qualification filter (`build_slate` still uses composite
+  def_rank × spread agreement; MIN_WEEK/MIN_DEFICIT/MAX_DEFICIT
+  unchanged).
+- the prop set (still four props per game, same tiers).
+- `SHRINK_THRESHOLD`, `SHRINK_FACTOR` (R-001 arithmetic unchanged).
+- `MATCHUP_BUMP`, `MATCHUP_WORST_K`, `MATCHUP_BEST_K` (R-002 unchanged).
+- R-003 trigger (still the `W6-R001-R002-R003b` union of injury-report
+  `Out` and non-ACT weekly roster).
+
+---
+
+## Week 7 — the current strategy
+
+**Version tag:** `W7-R001-R002-R003b-R005-R006`. Rows logged from
+Week 7 forward carry this in `methodology_version`. Weeks 3–6 keep
+their original tags and are scored under their own methodology.
+
+**Composition order.** Five rules stack. They are composed in a
 specific order so they don't interfere:
 
 ```
-  R-003 (base elevation)   —>  base is set in slate.py; the UI/calc.py
+  R-003b (base elevation)  —>  slate.py adds inherited rec/car when a
+                                position teammate is effectively out
+                                (injury-report Out OR non-ACT roster)
+  R-006 (small-N blend)    —>  slate.py blends the R-003-elevated base
+                                toward season average when gms<3 in the
+                                trailing window; output = base_*_r006,
+                                which is the FORMULA INPUT.
+  R-002 (matchup_adjust)   —>  additive bump from opp's position-specific
+                                EPA-allowed rank
+  formula                  —>  raw_expected = base_r006 × (pace/60) ×
+                                              usage_factor + matchup_adjust
+  R-005 (variable sigma)   —>  sigma_eff = max(SIGMA[market], base × 0.30)
+  R-001 (shrinkage)        —>  if |raw_expected − base_r006| > threshold:
+                                 expected = base_r006 + 0.5 × deviation
+                                else:  expected = raw_expected
+```
+
+R-005 only affects the final z-score; the base and raw_expected and
+R-001 shrinkage all use the original base. R-006 lands on top of
+R-003 (and no-ops when gms>=3) because the elevation is applied to
+the raw trailing-3 base, and only then is the "thin sample" question
+asked against the result.
+
+**Sigma** — now scales with base (R-005):
+```
+sigma_eff = max(SIGMA[market], base × 0.30)
+```
+- Rushing: floor `sigma = 5.5`; scale binds above base ≈ 18.3.
+- Receptions: floor `sigma = 2.5`; scale binds above base ≈ 8.3.
+
+**Mean formula:**
+```
+expected = base_r006 × (pace / 60) × usage_factor + matchup_adjust_r002
+         (then R-001 shrinks if deviation exceeds threshold)
+```
+
+- `base_r006` = `base_car_r006` for rushing props, `base_rec_r006`
+  for receiving. Equals `base_*_r003` when R-006 does not fire (which
+  equals the raw trailing-3 base when R-003 doesn't fire either).
+- `pace` = team YTD plays/game ÷ 60.
+- `usage_factor` = 1.0 by default.
+- `matchup_adjust_r002` = R-002 output (see registry).
+
+**Probability:**
+```
+z = (line - expected) / sigma_eff
+my_p = 1 - Φ(z)   for over
+my_p = Φ(z)       for under
+```
+
+**Clamp:** `my_p ∈ [0.02, 0.98]`.
+
+---
+
+## Week 6 — superseded strategy
+
+**Version tag:** `W6-R001-R002-R003b`. Rows logged weeks 6 (plus the
+R-003b amendment within Week 6) carry this in `methodology_version`.
+Superseded by W7's R-005/R-006 additions on 2026-10-22.
+
+**Composition order:**
+
+```
+  R-003b (base elevation)  —>  base is set in slate.py; the UI/calc.py
                                 consume base_car_r003 / base_rec_r003
   R-002 (matchup_adjust)   —>  additive bump from opp's position-specific
                                 EPA-allowed rank
@@ -298,30 +442,17 @@ specific order so they don't interfere:
                                 else:  expected = raw_expected
 ```
 
-The ordering choice matters because R-001's shrink target is `base`.
-If R-003 adjusts `base` *first*, R-001 shrinks toward the fresh,
-depth-chart-aware base rather than the stale pre-injury one — this is
-the resolution of the R-001/R-003 conflict Chris flagged in a Week 5
-`why` column.
-
-**Sigma** — unchanged from Week 4:
+**Sigma** — constant:
 - Rushing: `sigma = 5.5` (constant)
 - Receptions: `sigma = 2.5` (constant)
 
-**Mean formula.** Same shape as Week 4, with R-002 now populating
+**Mean formula.** Same shape as Week 4, with R-002 populating
 `matchup_adjust`:
 
 ```
 expected = base_r003 × (pace / 60) × usage_factor + matchup_adjust_r002
          (then R-001 shrinks if deviation exceeds threshold)
 ```
-
-- `base_r003` = `base_car_r003` for rushing props, `base_rec_r003`
-  for receiving props. Equals the raw trailing-3 base when R-003
-  does not fire.
-- `pace` = team YTD plays/game ÷ 60.
-- `usage_factor` = 1.0 by default; same hook as Week 4.
-- `matchup_adjust_r002` = R-002 output (see registry).
 
 **Probability:**
 ```
@@ -518,6 +649,97 @@ backtest:    2023 −0.0013, 2024 +0.0027, 2025 +0.0002 Brier delta vs
              re-backtesting against the expanded trigger is pending).
              See the "Between Week 5 and Week 6" section for the full
              table and the codification rationale.
+```
+
+### R-005 — variable-sigma scaling  (added 2026-10-22, active Week 7)
+
+```
+condition:   always active (replaces the fixed SIGMA constant in the
+             z-score step). sigma_eff = max(SIGMA[market], base × 0.30).
+applies to:  both markets.
+effect:      z = (line − expected) / sigma_eff
+             SIGMA floor stays at the Week 4 values (2.5 receiving,
+             5.5 rushing). SIGMA_SCALE = 0.30 is the scaling constant;
+             it binds (overrides the floor) when base × 0.30 > SIGMA:
+               - rushing: scale binds for base > 18.3 car/g
+               - receiving: scale binds for base > 8.3 rec/g
+             For low-base props the formula is unchanged (floor binds).
+             For high-base props sigma widens, softening overconfidence
+             when the expectation drifts far from a thin line.
+reasoning:   σ = 2.5 (receiving) and σ = 5.5 (rushing) were tuned for
+             typical slot/early-down workloads. A WR averaging 13 rec/g
+             (e.g., Nacua Week 6) has real game-to-game variance closer
+             to 4-5 rec, not 2.5. Keeping σ constant made the formula
+             over-confident on high-base props. The constant 0.30 is
+             the first-principles choice from empirical variance/base
+             ratios across WR/RB stat distributions. Larger values
+             fit backtest Brier better (the sweep showed improvement
+             up to σ_scale = 0.70+), but at the cost of regressing
+             predictions toward 0.5 — that is a Brier-minimization
+             artifact, not calibration improvement. 0.30 is the
+             defensible stop.
+source:      flagged by Chris 2026-10-18 after Puka Nacua UNDER 7.5
+             rec clamped at 0.02 under W6 methodology. Written up as
+             a candidate in memory 2026-10-18, backtested 2026-10-22,
+             shipped same day.
+tooling:     constant SIGMA_SCALE in tools/calc.py and ui.html. The
+             compute_myp function reads it when the caller passes
+             sigma_scale>0 (one_prop and estimateProb both do; the
+             backtest in validate.py can pass 0.0 to recover the
+             pre-R-005 behavior).
+backtest:    2023 +0.0017, 2024 +0.0015, 2025 +0.0016 Brier delta vs
+             the current W6 methodology (positive = improvement).
+             Worst-season +0.0015, mean +0.0016. Passes strict
+             codification policy on all three seasons.
+```
+
+### R-006 — small-N blend of trailing-3 base toward season average  (added 2026-10-22, active Week 7)
+
+```
+condition:   the player's trailing-3 usage window contains fewer than
+             3 games actually played (gms < 3 on the usage() row — i.e.,
+             the player was inactive for one or more weeks of the
+             window).
+applies to:  both markets.
+effect:      base_blended = (gms/3) × base_r003 + (1 − gms/3) × season_avg
+             where season_avg is the player's mean of the stat across
+             all games they actually played through the previous week
+             (nflreadpy player_stats, filtered to the player's games).
+             gms = 0 falls back to season_avg; gms = 1 weights 1/3 on
+             the single-game trailing, 2/3 on the season prior; gms = 2
+             weights 2/3 on the two-game trailing, 1/3 on the season
+             prior; gms ≥ 3 is a no-op (base_r006 == base_r003).
+             Applied in slate.py AFTER R-003 so the elevation (if any)
+             is included in the trailing side of the blend, and the
+             resulting base_*_r006 is what the UI and tools/calc.py
+             consume as the formula input.
+reasoning:   usage() divides sum-of-stat by games actually played, so
+             a player who missed games in the trailing-3 window has a
+             thinner, noisier base. In practice this biases the base
+             toward "best recent games the player had on return,"
+             which is often the hot stretch, not the sustainable
+             level. The season-to-date average is a more stable prior.
+             Weighting gms/3 is the natural effective-sample-size
+             weighting (3 games is "full prior"; thinner samples get
+             shrunk toward the longer-horizon average).
+source:      flagged by Chris 2026-10-18 after confirming Nacua's
+             Week 6 base of 13.0 rec/g was averaged over 2 games
+             (weeks 4 and 5), skipping his inactive weeks 2-3.
+             Written up 2026-10-18, backtested 2026-10-22, shipped.
+tooling:     slate.py applies R-006 to each queue entry after R-003.
+             blend_small_n() and season_avg() live in nflcal/data.py.
+             r006_fires and r006_notes are persisted as audit; the
+             formula input is base_*_r006. R-006 fires on roughly
+             28% of queued props in a typical week (anyone who missed
+             a game in the trailing-3 window).
+backtest:    2023 +0.0013, 2024 +0.0019, 2025 +0.0038 Brier delta vs
+             the current W6 methodology (positive = improvement).
+             Worst-season +0.0013, mean +0.0023. Passes strict
+             codification policy on all three seasons. Sub-Brier on
+             the subset where R-006 fires (gms<3): 2025 improves
+             0.2566 → 0.2420 — the largest effect of any rule we've
+             shipped. Combined with R-005: 2023 +0.0027, 2024 +0.0031,
+             2025 +0.0051, worst-season +0.0027, mean +0.0036.
 ```
 
 ### Placeholder format for future rules:

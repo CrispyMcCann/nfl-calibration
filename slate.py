@@ -185,6 +185,28 @@ def main():
                                         pl.get("rec", 0.0),
                                         pl.get("car", 0.0),
                                         exclude_player=pl["name"])
+                # R-006 small-N blend (W7). When the player's trailing-3
+                # window saw gms<3 (missed games), blend their R-003-
+                # elevated base toward their season-to-date average.
+                # Fires in the slate so the UI/calc.py read a single
+                # fully-composed base (base_*_r006). gms>=3 → no-op,
+                # base_*_r006 == base_*_r003.
+                pl_gms = int(pl.get("gms") or 0)
+                sa_rec = D.season_avg(SEASON, pl["name"], week - 1, "receiving")
+                sa_car = D.season_avg(SEASON, pl["name"], week - 1, "rushing")
+                base_rec_r006 = round(
+                    D.blend_small_n(elev["base_rec"], sa_rec, pl_gms), 2)
+                base_car_r006 = round(
+                    D.blend_small_n(elev["base_car"], sa_car, pl_gms), 2)
+                r006_fires = pl_gms < 3 and (sa_rec is not None or sa_car is not None)
+                if r006_fires:
+                    w_rec = pl_gms / 3.0
+                    r006_notes = (f"gms={pl_gms}; blend {w_rec:.2f}*trail + "
+                                  f"{1 - w_rec:.2f}*season "
+                                  f"(rec {elev['base_rec']:.1f}->{base_rec_r006:.1f}, "
+                                  f"car {elev['base_car']:.1f}->{base_car_r006:.1f})")
+                else:
+                    r006_notes = ""
                 is_home = entry["game"].split(" @ ")[1] == team
                 return {"game": entry["game"], "game_date": entry["date"],
                         "kickoff": entry["kickoff"],
@@ -225,7 +247,15 @@ def main():
                         "own_pass_off_rank": own_pass_off,
                         "own_rush_off_rank": own_rush_off,
                         "pass_off_rank_opp": pass_off_opp,
-                        "rush_off_rank_opp": rush_off_opp}
+                        "rush_off_rank_opp": rush_off_opp,
+                        # --- R-006 (small-N blend). base_*_r006 is the
+                        # FORMULA INPUT on W7+. Equals base_*_r003 when
+                        # the player played all 3 games in the trailing
+                        # window (r006_fires=False).
+                        "base_rec_r006": base_rec_r006,
+                        "base_car_r006": base_car_r006,
+                        "r006_fires": r006_fires,
+                        "r006_notes": r006_notes}
 
             # Queue uses the depth-chart-aware picker so an injured WR1 who
             # missed the trailing-3 window does not cede the slot to a WR2

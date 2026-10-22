@@ -60,6 +60,12 @@ FIELDS = [
     "own_pass_def_rank", "own_rush_def_rank",
     "own_pass_off_rank", "own_rush_off_rank",
     "pass_off_rank_opp", "rush_off_rank_opp",
+    # W7 R-006 audit. base_*_r006 is the post-R-003 post-R-006 base the
+    # formula consumes on W7+ rows (equivalent to base_*_r003 when
+    # R-006 doesn't fire). r006_fires marks whether the trailing-3 base
+    # was blended toward the player's season average; r006_notes names
+    # the inputs so an auditor can retrace the arithmetic.
+    "base_rec_r006", "base_car_r006", "r006_fires", "r006_notes",
 ]
 
 
