@@ -72,20 +72,29 @@ def compute_myp(market: str, side: str, base: float, pace: float,
                 rush_rank_opp: int | None = None,
                 usage_factor: float = 1.0,
                 apply_r002: bool = True,
-                apply_r001: bool = True) -> dict:
+                apply_r001: bool = True,
+                sigma_scale: float = 0.0) -> dict:
     """Pure form of the Week 6 probability formula. `one_prop` is the
     interactive wrapper around this; validate.py's --mode brier reuses it
-    to backtest variants (apply_r001/apply_r002 off = earlier methodologies).
+    to backtest variants (apply_r001/apply_r002 off = earlier methodologies;
+    sigma_scale > 0 = R-005 variable-sigma candidate).
 
     R-003 is applied in slate.py BEFORE the formula runs — pass the
     already-elevated base here. For backtesting a baseline that doesn't
     include R-003, pass the raw base. The function has no notion of
     which rule produced `base`.
 
+    sigma_scale (R-005 candidate, not codified in live methodology):
+      0.0 → sigma = SIGMA[market] (current behavior)
+      >0  → sigma = max(SIGMA[market], base × sigma_scale). Floor binds for
+            low-base props; scale binds for high-base ones. The backtest
+            uses this; live calc/UI do not until codification.
+
     Returns {my_p, expected, raw_expected, deviation, r001_fired,
-             r002_fired, matchup_adjust}.
+             r002_fired, matchup_adjust, sigma_eff}.
     """
-    sigma = SIGMA[market]
+    sigma_base = SIGMA[market]
+    sigma_eff = max(sigma_base, base * sigma_scale) if sigma_scale > 0 else sigma_base
     threshold = SHRINK_THRESHOLD[market]
     matchup_adjust = matchup_adjust_r002(market, pass_rank_opp, rush_rank_opp) \
         if apply_r002 else 0.0
@@ -93,7 +102,7 @@ def compute_myp(market: str, side: str, base: float, pace: float,
     deviation = raw_expected - base
     r001_fired = apply_r001 and abs(deviation) > threshold
     expected = (base + SHRINK_FACTOR * deviation) if r001_fired else raw_expected
-    z = (line - expected) / sigma
+    z = (line - expected) / sigma_eff
     p_over = 1 - phi(z)
     my_p = p_over if side == "over" else 1 - p_over
     my_p = max(0.02, min(0.98, my_p))
@@ -105,6 +114,7 @@ def compute_myp(market: str, side: str, base: float, pace: float,
         "r001_fired": r001_fired,
         "r002_fired": matchup_adjust != 0,
         "matchup_adjust": matchup_adjust,
+        "sigma_eff": sigma_eff,
     }
 
 

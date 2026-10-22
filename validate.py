@@ -160,6 +160,31 @@ def _line_proxy(ps: pd.DataFrame, player: str, through_week: int, market: str) -
     return round(2 * med) / 2 - 0.5
 
 
+def _season_avg(ps: pd.DataFrame, player: str, through_week: int, market: str) -> float | None:
+    """R-006 helper: player's season-to-date mean of the stat across all
+    games they actually played through_week. Returns None if no games.
+    This is the stable prior that R-006 blends the thin trailing-3 base
+    toward when the player missed games."""
+    hit = ps[(ps.player_display_name == player) & (ps.week <= through_week)]
+    if hit.empty:
+        return None
+    col = hit.carries if market == "rushing" else hit.receptions
+    return float(col.mean())
+
+
+def _blend_small_n(base: float, season_avg: float | None, gms: int) -> float:
+    """R-006 blend. When the player's trailing window saw <3 games played,
+    weight the thin trailing base against the season-to-date mean.
+    Weight on trailing = gms/3, so gms=2 → 2/3 trailing + 1/3 season,
+    gms=1 → 1/3 trailing + 2/3 season. gms=0 should not reach this (the
+    player wouldn't be queued), but if it does we fall back to season_avg.
+    gms>=3 is a no-op."""
+    if gms >= 3 or season_avg is None:
+        return base
+    w = max(gms, 0) / 3.0
+    return w * base + (1.0 - w) * season_avg
+
+
 def _run_brier_mode(a) -> None:
     """Per-variant Brier backtest. See the module docstring for policy."""
     seasons = [int(x) for x in a.seasons.split(",")]
@@ -218,39 +243,61 @@ def _run_brier_mode(a) -> None:
                                             exclude_player=pl["name"])
                     base_raw   = pl["car"] if market == "rushing" else pl["rec"]
                     base_r003  = elev["base_car"] if market == "rushing" else elev["base_rec"]
+                    # R-006 inputs: games played in trailing-3 window + season avg.
+                    pl_gms   = int(pl.get("gms", 3))
+                    sa       = _season_avg(ps, pl["name"], wk - 1, market)
+                    base_r006_from_r003 = _blend_small_n(base_r003, sa, pl_gms)
 
                     # Outcome: 1 if actual > line (over hit), 0 if under hit.
                     # Push impossible on half-point line.
                     over_hit = 1 if actual > line else 0
                     y = over_hit if side == "over" else (1 - over_hit)
 
-                    # Each variant's my_p.
+                    # Each variant's my_p. First 4 keep the original ladder
+                    # (no rules → current W6-R001-R002-R003b = "all") so the
+                    # existing table is unchanged. The last 3 stack R-005 and
+                    # R-006 on top of "all" to answer the Week 7 question.
+                    sc = a.sigma_scale  # R-005 constant; default 0.30
                     variants_myp = {
-                        "baseline": compute_myp(market, side, base_raw, pace, line,
-                                                pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
-                                                apply_r002=False)["my_p"],
-                        "r002":     compute_myp(market, side, base_raw, pace, line,
-                                                pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
-                                                apply_r002=True)["my_p"],
-                        "r003":     compute_myp(market, side, base_r003, pace, line,
-                                                pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
-                                                apply_r002=False)["my_p"],
-                        "all":      compute_myp(market, side, base_r003, pace, line,
-                                                pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
-                                                apply_r002=True)["my_p"],
+                        "baseline":          compute_myp(market, side, base_raw, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=False)["my_p"],
+                        "r002":              compute_myp(market, side, base_raw, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=True)["my_p"],
+                        "r003":              compute_myp(market, side, base_r003, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=False)["my_p"],
+                        "all":               compute_myp(market, side, base_r003, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=True)["my_p"],
+                        "all_r005":          compute_myp(market, side, base_r003, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=True, sigma_scale=sc)["my_p"],
+                        "all_r006":          compute_myp(market, side, base_r006_from_r003, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=True)["my_p"],
+                        "all_r005_r006":     compute_myp(market, side, base_r006_from_r003, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=True, sigma_scale=sc)["my_p"],
                     }
                     rows.append({"season": season, "week": wk, "player": pl["name"],
                                  "market": market, "side": side,
                                  "line": line, "actual": actual, "y": y,
                                  "r003_fired": elev["fires"],
+                                 "gms": pl_gms, "small_n": pl_gms < 3,
                                  **{f"myp_{v}": variants_myp[v] for v in variants_myp}})
 
         df = pd.DataFrame(rows)
         if df.empty:
             print(f"  no scorable props across weeks {a.from_week}-{last}")
             continue
-        print(f"  {len(df)} props across weeks {a.from_week}-{last}")
-        for v in ("baseline", "r002", "r003", "all"):
+        n_small = int(df.small_n.sum())
+        print(f"  {len(df)} props across weeks {a.from_week}-{last}  "
+              f"({n_small} with trailing gms<3; R-006 affects those)")
+        all_variants = ("baseline", "r002", "r003", "all",
+                        "all_r005", "all_r006", "all_r005_r006")
+        for v in all_variants:
             b = ((df[f"myp_{v}"] - df.y) ** 2).mean()
             agg_rows.append({"season": season, "variant": v, "n": len(df), "brier": b})
 
@@ -259,27 +306,49 @@ def _run_brier_mode(a) -> None:
             print(f"  R-003 fired on {len(r003_hits)} props "
                   f"(sub-Brier baseline={((r003_hits.myp_baseline-r003_hits.y)**2).mean():.4f}, "
                   f"r003={((r003_hits.myp_r003-r003_hits.y)**2).mean():.4f})")
+        small = df[df.small_n]
+        if len(small):
+            print(f"  small-N (gms<3) sub-Brier: "
+                  f"all={((small.myp_all-small.y)**2).mean():.4f}, "
+                  f"all_r006={((small.myp_all_r006-small.y)**2).mean():.4f}, "
+                  f"all_r005_r006={((small.myp_all_r005_r006-small.y)**2).mean():.4f}")
         print()
 
     if not agg_rows:
         raise SystemExit("no backtest data produced; try --from-week lower")
 
+    all_variants = ["baseline", "r002", "r003", "all",
+                    "all_r005", "all_r006", "all_r005_r006"]
     out = pd.DataFrame(agg_rows).pivot(index="season", columns="variant", values="brier")
-    out = out[["baseline", "r002", "r003", "all"]]
+    out = out[all_variants]
     print("Brier per variant per season (lower is better)")
     print(out.to_string(float_format=lambda v: f"{v:.4f}"))
     print()
-    print("deltas vs baseline (negative = variant WORSE; policy says drop a")
-    print("rule only when every season shows delta < 0)")
-    delta = out.sub(out["baseline"], axis=0).drop(columns=["baseline"])
-    # Delta polarity convention: positive = variant lowered Brier = better.
-    delta = -delta
-    print(delta.to_string(float_format=lambda v: f"{v:+.4f}"))
+
+    # Delta polarity: positive = variant lowered Brier = better.
+    print("Table 1 — deltas vs baseline (no rules). Keeps the W6 codification")
+    print("record. Policy was: drop a rule only when every season shows delta < 0.")
+    delta_b = -out.sub(out["baseline"], axis=0).drop(columns=["baseline"])
+    print(delta_b.to_string(float_format=lambda v: f"{v:+.4f}"))
     print()
-    worst = delta.min()
-    for v in ("r002", "r003", "all"):
-        verdict = "KEEP" if worst[v] >= 0 else "DROP"
-        print(f"  {v}:  worst-season delta {worst[v]:+.4f}   →  {verdict}")
+    worst_b = delta_b.min()
+    for v in ("r002", "r003", "all", "all_r005", "all_r006", "all_r005_r006"):
+        verdict = "KEEP" if worst_b[v] >= 0 else "DROP"
+        print(f"  {v}:  worst-season delta vs baseline {worst_b[v]:+.4f}   →  {verdict}")
+    print()
+
+    print("Table 2 — deltas vs CURRENT (W6-R001-R002-R003b = 'all'). This is the")
+    print("Week 7 codification view: does adding R-005 and/or R-006 on top of what")
+    print("already shipped improve calibration?")
+    incr_cols = ["all_r005", "all_r006", "all_r005_r006"]
+    delta_c = -out[incr_cols].sub(out["all"], axis=0)
+    print(delta_c.to_string(float_format=lambda v: f"{v:+.4f}"))
+    print()
+    worst_c = delta_c.min()
+    mean_c  = delta_c.mean()
+    for v in incr_cols:
+        verdict = "KEEP" if worst_c[v] >= -0.0001 else "DROP"
+        print(f"  {v}:  worst-season delta vs 'all' {worst_c[v]:+.4f}   mean {mean_c[v]:+.4f}   →  {verdict}")
 
 
 # ------------- entry point --------------------------------------------------
@@ -295,6 +364,9 @@ def main():
     ap.add_argument("--variant", default="all-table",
                     choices=("baseline", "r002", "r003", "all", "all-table"),
                     help="brier mode only; 'all-table' prints every variant")
+    ap.add_argument("--sigma-scale", type=float, default=0.30,
+                    help="R-005 candidate: sigma_eff = max(SIGMA, base × this). "
+                         "Default 0.30. Sweep via repeated runs: 0.20, 0.25, 0.30, 0.35.")
     a = ap.parse_args()
     if a.mode == "link":
         _run_link_mode(a)
