@@ -115,7 +115,7 @@ def main():
 
     if a.json:
         import json
-        week = a.week or D.last_completed_week(SEASON) + 1
+        week = a.week or D.next_open_week(SEASON)
         s = build_slate(SEASON, week, narrow=a.narrow)
         paces = D.pace(SEASON, week - 1)
         # R-002 uses position-specific defensive EPA ranks from the same
@@ -313,7 +313,7 @@ def main():
         print(json.dumps(payload, indent=1, allow_nan=False))
         return
 
-    week = a.week or D.last_completed_week(SEASON) + 1
+    week = a.week or D.next_open_week(SEASON)
     s = build_slate(SEASON, week, narrow=a.narrow)
     if s.empty:
         print(f"No qualifying games in week {week}.")

@@ -497,6 +497,19 @@ def last_completed_week(season: int) -> int:
     return int(done.week.max()) if len(done) else 0
 
 
+def next_open_week(season: int) -> int:
+    """The week still being played or next to be played: the earliest week
+    with an unplayed game dated today or later (US Eastern). Not
+    last_completed_week + 1 — one finished Thursday game would make that
+    skip the rest of its own week. Past-dated unplayed games (postponed or
+    cancelled) are ignored so they can't pin the default to an old week."""
+    import datetime as dt, zoneinfo
+    s = _schedules(season)
+    today = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York")).date().isoformat()
+    open_ = s[s.result.isna() & (s.gameday.astype(str) >= today)]
+    return int(open_.week.min()) if len(open_) else last_completed_week(season) + 1
+
+
 def pace(season: int, through_week: int) -> pd.Series:
     """Offensive plays per game. Volume props scale with it, so it is a
     control, not part of the hypothesis."""
