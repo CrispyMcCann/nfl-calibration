@@ -27,6 +27,7 @@ Two modes:
 
 from __future__ import annotations
 import argparse
+import functools
 import numpy as np
 import pandas as pd
 import nflreadpy as nfl
@@ -191,6 +192,88 @@ R007_CAP_REC = 0.30  # WR: R-003 bump capped at 30% of player's own trailing bas
 R007_CAP_CAR = 0.50  # RB: R-003 bump capped at 50% of player's own trailing base
 R008_MIN_RATE_RB = 5.0   # don't deflate for returning backups with <5 car/g
 R008_MIN_RATE_WR = 2.0   # don't deflate for returning backups with <2 rec/g
+
+# ----- W9 draft candidates (backtest-only, not yet in prod) -----
+# Chosen 2026-10-29 after sports-stats research (PlayerProfiler Variance
+# Manifesto, Efron-Morris regression halflife from Bleacher Report).
+
+# R-005' upgraded SIGMA_SCALE (field median; was 0.30 under W8).
+R005B_SIGMA_SCALE_RB = 0.60   # ~RB CV median per PlayerProfiler
+R005B_SIGMA_SCALE_WR = 0.65   # ~WR CV median per PlayerProfiler
+
+# R-010 empirical-Bayes halflife (games at which shrinkage is 50/50).
+R010_HALFLIFE_RB = 29.5   # Bleacher Report / Efron-Morris
+R010_HALFLIFE_WR = 13.5   # ditto
+
+# R-010 positional priors — league-mean rate for a depth-rank-1 player
+# at the given position. Used as fallback when prior-season data missing
+# (rookies, new-to-league players). Rough calibration from historical
+# nflverse; refinable per-season if needed.
+R010_POSITIONAL_PRIOR_RB = 14.0   # car/g for a typical RB1
+R010_POSITIONAL_PRIOR_WR =  5.0   # rec/g for a typical WR1
+
+
+@functools.lru_cache(maxsize=8)
+def _prior_season_stats(season: int) -> pd.DataFrame:
+    """Prior-season player_stats cache. One file per prior season; cheap
+    to repeat across many rows via lru_cache. Returns an empty frame if
+    the prior season has no data (first-year league / 2022 for the 2023
+    backtest start)."""
+    try:
+        return nfl.load_player_stats([season]).to_pandas()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _prior_full_season(season: int, player: str, market: str) -> tuple[float | None, int]:
+    """Full prior-season (season-1) mean rate across all games the player
+    played. Chris chose full-season over last-5-of-prior for stability.
+    Returns (mean, n_games) or (None, 0) if unavailable."""
+    ps = _prior_season_stats(season - 1)
+    if ps.empty:
+        return None, 0
+    hit = ps[ps.player_display_name == player]
+    if hit.empty:
+        return None, 0
+    col = hit.carries if market == "rushing" else hit.receptions
+    return float(col.mean()), int(len(hit))
+
+
+def _r010_ebayes_base(trailing_mean: float, trailing_n: int,
+                     season_mean: float | None, season_n: int,
+                     prior_mean: float | None, prior_n: int,
+                     positional_mean: float, position: str) -> float:
+    """R-010 empirical-Bayes base. See METHODOLOGY.md deferred-candidates
+    (via memory). The idea: shrink the player's rate toward prior-season
+    (or positional fallback) with pseudo-count = Efron-Morris halflife;
+    then blend with trailing-3 for recency weight.
+    """
+    k = R010_HALFLIFE_RB if position == "RB" else R010_HALFLIFE_WR
+
+    # Pick the prior: previous-season average when we have ≥5 games on
+    # record; otherwise fall back to the positional mean (rookies, new).
+    prior = prior_mean if (prior_mean is not None and prior_n >= 5) else positional_mean
+
+    # Shrink current-season observation toward the prior.
+    if season_n > 0 and prior is not None:
+        shrunk_season = (season_n * season_mean + k * prior) / (season_n + k)
+    elif season_n > 0:
+        shrunk_season = season_mean
+    elif prior is not None:
+        shrunk_season = prior
+    else:
+        # No data of any kind — fall back to trailing (or zero).
+        return float(trailing_mean or 0)
+
+    # Blend trailing-window with the shrunk season estimate. Pseudo-count
+    # on the shrunk season = k/2 — the shrunk estimate itself is already
+    # a composite, worth about half as much "evidence weight" as the raw
+    # prior would be.
+    recency_pseudo = k / 2.0
+    if trailing_n > 0:
+        return (trailing_n * trailing_mean + recency_pseudo * shrunk_season) \
+             / (trailing_n + recency_pseudo)
+    return shrunk_season
 
 
 def _cap_r007(base_raw: float, base_r003: float, position: str) -> float:
@@ -405,6 +488,30 @@ def _run_brier_mode(a) -> None:
                     # existing table is unchanged. The last 3 stack R-005 and
                     # R-006 on top of "all" to answer the Week 7 question.
                     sc = a.sigma_scale  # R-005 constant; default 0.30
+                    # W9 draft candidates (backtest-only). R-010 empirical-Bayes
+                    # base replaces R-003+R-006 composition for the receiving-
+                    # or rushing-market base; R-005' uses position-specific
+                    # SIGMA_SCALE. apply_r001=False in the W9 variant because
+                    # the ebayes blend subsumes R-001's shrinkage.
+                    prior_mean, prior_n = _prior_full_season(season, pl["name"], market)
+                    positional_mean = (R010_POSITIONAL_PRIOR_RB if pos == "RB"
+                                       else R010_POSITIONAL_PRIOR_WR)
+                    # season_n = total games the player played this season
+                    # through wk-1. For in-window games we have gms; for the
+                    # rest we need to count from player_stats directly.
+                    _psh = ps[(ps.player_display_name == pl["name"]) & (ps.week < wk)]
+                    season_n_actual = int(len(_psh))
+                    season_mean_actual = (float(_psh.carries.mean()) if market == "rushing"
+                                          else float(_psh.receptions.mean())) if season_n_actual else None
+                    trailing_mean = base_car_raw if market == "rushing" else base_rec_raw
+                    base_r010 = _r010_ebayes_base(
+                        trailing_mean, pl_gms,
+                        season_mean_actual, season_n_actual,
+                        prior_mean, prior_n,
+                        positional_mean, pos)
+                    # R-005' sigma scale per position (independent of market).
+                    sc_r005b = R005B_SIGMA_SCALE_RB if pos == "RB" else R005B_SIGMA_SCALE_WR
+
                     # Pre-compute R-008 variants that drop other rules so we can
                     # ablate the W8 stack rule-by-rule. The "r008 only" variant
                     # deflates from raw base; the "no_r006" variant deflates
@@ -486,6 +593,20 @@ def _run_brier_mode(a) -> None:
                                                          pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
                                                          apply_r002=True, sigma_scale=sc)["my_p"],
                         # w8_no_r008 == all_r005_r006 (already present).
+
+                        # W9 draft slice: SIGMA_SCALE bump + R-010 empirical
+                        # Bayes base + drop R-001.
+                        "sigma_up":          compute_myp(market, side, base_r008, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=True, sigma_scale=sc_r005b)["my_p"],
+                        "r010":              compute_myp(market, side, base_r010, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=True, apply_r001=False,
+                                                         sigma_scale=sc)["my_p"],
+                        "w9":                compute_myp(market, side, base_r010, pace, line,
+                                                         pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                         apply_r002=True, apply_r001=False,
+                                                         sigma_scale=sc_r005b)["my_p"],
                     }
                     rows.append({"season": season, "week": wk, "player": pl["name"],
                                  "market": market, "side": side,
@@ -506,7 +627,8 @@ def _run_brier_mode(a) -> None:
                         "all_r005", "all_r006", "all_r005_r006",
                         "r007", "r008", "r007_r008",
                         "r005_only", "r006_only", "r008_only",
-                        "w8_no_r002", "w8_no_r003", "w8_no_r005", "w8_no_r006")
+                        "w8_no_r002", "w8_no_r003", "w8_no_r005", "w8_no_r006",
+                        "sigma_up", "r010", "w9")
         for v in all_variants:
             b = ((df[f"myp_{v}"] - df.y) ** 2).mean()
             agg_rows.append({"season": season, "variant": v, "n": len(df), "brier": b})
@@ -536,7 +658,8 @@ def _run_brier_mode(a) -> None:
                     "all_r005", "all_r006", "all_r005_r006",
                     "r007", "r008", "r007_r008",
                     "r005_only", "r006_only", "r008_only",
-                    "w8_no_r002", "w8_no_r003", "w8_no_r005", "w8_no_r006"]
+                    "w8_no_r002", "w8_no_r003", "w8_no_r005", "w8_no_r006",
+                    "sigma_up", "r010", "w9"]
     out = pd.DataFrame(agg_rows).pivot(index="season", columns="variant", values="brier")
     out = out[all_variants]
     print("Brier per variant per season (lower is better)")
@@ -593,6 +716,19 @@ def _run_brier_mode(a) -> None:
     print()
     for v in iso_cols:
         print(f"  {v:12s} worst {delta_iso[v].min():+.4f}   mean {delta_iso[v].mean():+.4f}")
+    print()
+
+    print("Table 6 — W9 DRAFT SLICE vs current W8 (r008). Positive = W9 variant")
+    print("improves calibration. Strict policy: ship if worst-season ≥ -0.0001.")
+    w9_cols = ["sigma_up", "r010", "w9"]
+    delta_w9 = -out[w9_cols].sub(out["r008"], axis=0)
+    print(delta_w9.to_string(float_format=lambda v: f"{v:+.4f}"))
+    print()
+    for v in w9_cols:
+        worst_v = delta_w9[v].min()
+        mean_v  = delta_w9[v].mean()
+        verdict = "KEEP" if worst_v >= -0.0001 else "DROP"
+        print(f"  {v:10s} worst {worst_v:+.4f}   mean {mean_v:+.4f}   →  {verdict}")
     print()
 
     print("Table 5 — ABLATION of the full W8 stack (R-002+R-003+R-005+R-006+R-008 =")
