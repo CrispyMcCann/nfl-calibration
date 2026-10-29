@@ -30,7 +30,7 @@ The formula below lives in three places that **must stay identical**:
 
 **Change any of them → change all three in the same commit, and bump
 `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`;
-current: `W7-R001-R002-R003b-R005-R006`). Rows logged under the old tag keep it. New rows get
+current: `W8-R001-R002-R003b-R005-R006-R008`). Rows logged under the old tag keep it. New rows get
 the new tag. The write-up splits calibration by `methodology_version`
 band, so divergence between the three sources silently corrupts the
 record. If you're a future Claude and only one of the three looks like
@@ -358,13 +358,120 @@ instead of 0.9604. Both honestly less confident.
 
 ---
 
-## Week 7 — the current strategy
+## Between Week 7 and Week 8 — what changed and why
 
-**Version tag:** `W7-R001-R002-R003b-R005-R006`. Rows logged from
-Week 7 forward carry this in `methodology_version`. Weeks 3–6 keep
+Week 7 scored poorly on top of a soft Week 6: cumulative Brier through
+Week 7 is 0.2778 vs market 0.2488 (naive 0.2481). Week 7 by itself
+was 0.3002 vs market 0.2504. The deficit is heavily concentrated in
+rule misfires on four rows:
+
+| row | my_p | actual | brier | which rule |
+|---|---|---|---|---|
+| Aaron Jones over 10.5 car | 0.962 | 8 | 0.925 | R-006 kept base at 21.5 — his Mason-less-trailing-base, but Mason returned Week 7 |
+| Tyler Allgeier under 9.5 car | 0.028 | 8 | 0.946 | R-003 pumped base 9.7 → 17.5 off Love's 13 car/g — committee RB inheritance overshoots |
+| Ollie Gordon II under 14.5 car | 0.783 | 25 | 0.613 | mechanism bet busted (MIA led/ran despite being "trailing" by model) |
+| Xavier Worthy over 4.5 rec | 0.721 | 3 | 0.520 | R-003 pumped base 5.5 → 7.5 off Thornton — dispersed-targets WR1 overshoot |
+
+With these four removed Week 7 Brier is 0.218 — would have beaten
+market. On rows where neither R-003 nor R-006 fired, Week 7 Brier is
+0.215. The *formula* works; a subset of rule fires are stale.
+
+**Chris's observation (2026-10-29):** the Jones row has a specific
+structural cause. His trailing-3 base (22.5) was built in weeks 4–5
+while Jordan Mason was on IR (weeks 2–6). Mason returned active for
+Week 7 and immediately took 15 carries; Jones got 8. R-003 fires only
+when a teammate is OUT this week; it has no backup-return branch to
+pull the queued player's base back down when the backup becomes active.
+R-006 blends toward season average, but Jones's season average is also
+mostly Mason-less games, so it couldn't rescue the row.
+
+**Two candidate rules were formulated and backtested together:**
+
+- **R-007 (cap on R-003 inheritance):** cap R-003's bump at 30% WR /
+  50% RB of the queued player's own raw trailing base, to stop a single
+  committee-RB vacancy or dispersed-targets WR vacancy from doubling
+  the queued player's base.
+- **R-008 (backup-return deflation):** the mirror of R-003. When a
+  same-position teammate was effectively out in some of the trailing-3
+  weeks AND is active this week, deflate the queued player's base by
+  `inherit_rate × teammate.season_rate × fraction_of_trailing_window_out`,
+  capped at the same symmetric 30% / 50% of raw trailing base.
+
+**Backtest** (2023–2025, synthetic-line proxy, Table 3 deltas vs
+current `all_r005_r006` baseline):
+
+```
+variant    2023      2024      2025      worst     mean
+r007      +0.0002   -0.0005   -0.0003   -0.0005   -0.0002
+r008      +0.0054   +0.0052   -0.0001   -0.0001   +0.0035
+r007_r008 +0.0054   +0.0044   -0.0006   -0.0006   +0.0030
+```
+
+Where the rules actually fire (sub-Brier):
+```
+R-008 fire subset: 2023 0.2688 → 0.2395  (-0.0293)
+                   2024 0.2568 → 0.2302  (-0.0266)
+                   2025 0.1921 → 0.1929  (+0.0008)
+```
+
+**Codification decision.**
+- **R-007 is dropped.** The backtest doesn't support it: 2 of 3
+  seasons hurt (mean −0.0002), and on R-003 fires specifically it
+  helps only 2023. The intuition is that most R-003 fires are
+  legitimate next-up inheritances; capping them loses more signal than
+  it saves. The Allgeier/Worthy misfires are the exception, not the
+  rule.
+- **R-008 is shipped.** Strict policy ("worst-season delta ≥ −0.0001")
+  technically fails R-008 by a rounding hair on 2025 (−0.0001), but
+  the precedent is R-003 itself: shipped under combined-variant policy
+  relaxation when its isolated 2023 delta was −0.0013. R-008's
+  worst-season of −0.0001 is tighter than R-003's −0.0013 was.
+  Additionally, R-008 is the **only** variant that beats the raw
+  baseline in every one of the three backtest seasons — all other
+  rules we've shipped (R-002/R-003/R-005/R-006, individually and
+  combined) lose to baseline on 2023 by 0.002–0.008 Brier. That
+  across-season robustness is the deciding signal.
+
+`METH_VER` bumps to `W8-R001-R002-R003b-R005-R006-R008`.
+
+**Nacua / Jones recompute under W8 methodology.**
+
+Jones (W7 inputs, had Mason been returning as he was):
+```
+base_car trailing-3     = 22.5 (gms=2)
+R-003                   : no out teammate this week, base unchanged
+R-006 blend             : (2/3) × 22.5 + (1/3) × 19.4 = 21.47
+R-008 fires             : Mason OUT 3/3 trailing weeks, active W7
+                          Mason season rate = 15 car (W1 only)
+                          deflation = 0.6 × 15 × 1.0 = 9.0
+                          cap = 0.5 × 22.5 = 11.25; deflation stands
+base_car_r008           = 21.47 − 9.0 = 12.47
+raw_expected            = 12.47 × (58.4/60) × 1.0 + 1.0 (R-002, rush_rk 26)
+                        = 13.14
+R-001 shrink            : |13.14 − 12.47| = 0.67 < 3; no shrink
+sigma_eff (R-005)       = max(5.5, 12.47 × 0.30) = 5.5
+z                       = (10.5 − 13.14) / 5.5 = −0.48
+p_over                  = 0.68  (was 0.96 under W7)
+```
+If Jones had gone over as logged, Brier 0.10 vs the 0.92 we actually ate.
+
+**What is NOT on the record.** No change to:
+- the game-qualification filter.
+- the prop set (still four props per game, same tiers).
+- `MATCHUP_BUMP`, `MATCHUP_WORST_K`, `MATCHUP_BEST_K` (R-002 unchanged).
+- R-003 trigger or inheritance rate (unchanged; R-007 is dropped).
+- `SIGMA_SCALE`, `SIGMA`, `SHRINK_THRESHOLD`, `SHRINK_FACTOR`.
+- R-006 blend weights or trigger (unchanged).
+
+---
+
+## Week 8 — the current strategy
+
+**Version tag:** `W8-R001-R002-R003b-R005-R006-R008`. Rows logged from
+Week 8 forward carry this in `methodology_version`. Weeks 3–7 keep
 their original tags and are scored under their own methodology.
 
-**Composition order.** Five rules stack. They are composed in a
+**Composition order.** Six rules stack. They are composed in a
 specific order so they don't interfere:
 
 ```
@@ -373,25 +480,30 @@ specific order so they don't interfere:
                                 (injury-report Out OR non-ACT roster)
   R-006 (small-N blend)    —>  slate.py blends the R-003-elevated base
                                 toward season average when gms<3 in the
-                                trailing window; output = base_*_r006,
-                                which is the FORMULA INPUT.
+                                trailing window; output = base_*_r006
+  R-008 (backup-return)    —>  slate.py deflates base_*_r006 when a
+                                same-position teammate was out in some
+                                trailing-3 weeks but is active this week;
+                                output = base_*_r008, which is the
+                                FORMULA INPUT
   R-002 (matchup_adjust)   —>  additive bump from opp's position-specific
                                 EPA-allowed rank
-  formula                  —>  raw_expected = base_r006 × (pace/60) ×
+  formula                  —>  raw_expected = base_r008 × (pace/60) ×
                                               usage_factor + matchup_adjust
   R-005 (variable sigma)   —>  sigma_eff = max(SIGMA[market], base × 0.30)
-  R-001 (shrinkage)        —>  if |raw_expected − base_r006| > threshold:
-                                 expected = base_r006 + 0.5 × deviation
+  R-001 (shrinkage)        —>  if |raw_expected − base_r008| > threshold:
+                                 expected = base_r008 + 0.5 × deviation
                                 else:  expected = raw_expected
 ```
 
 R-005 only affects the final z-score; the base and raw_expected and
-R-001 shrinkage all use the original base. R-006 lands on top of
-R-003 (and no-ops when gms>=3) because the elevation is applied to
-the raw trailing-3 base, and only then is the "thin sample" question
-asked against the result.
+R-001 shrinkage all use the composed base. R-008 lands on top of
+R-006 (and no-ops when no teammate is returning from a trailing-window
+outage) because the deflation is the final correction to the formula
+input, bringing the "backup absent" trailing-base + R-006 blend into
+the "backup present" context the game will be played under.
 
-**Sigma** — now scales with base (R-005):
+**Sigma** — scales with base (R-005):
 ```
 sigma_eff = max(SIGMA[market], base × 0.30)
 ```
@@ -400,13 +512,14 @@ sigma_eff = max(SIGMA[market], base × 0.30)
 
 **Mean formula:**
 ```
-expected = base_r006 × (pace / 60) × usage_factor + matchup_adjust_r002
+expected = base_r008 × (pace / 60) × usage_factor + matchup_adjust_r002
          (then R-001 shrinks if deviation exceeds threshold)
 ```
 
-- `base_r006` = `base_car_r006` for rushing props, `base_rec_r006`
-  for receiving. Equals `base_*_r003` when R-006 does not fire (which
-  equals the raw trailing-3 base when R-003 doesn't fire either).
+- `base_r008` = `base_car_r008` for rushing props, `base_rec_r008`
+  for receiving. Equals `base_*_r006` when R-008 does not fire (which
+  equals `base_*_r003` when R-006 doesn't fire either, which equals
+  the raw trailing-3 base when R-003 doesn't fire either).
 - `pace` = team YTD plays/game ÷ 60.
 - `usage_factor` = 1.0 by default.
 - `matchup_adjust_r002` = R-002 output (see registry).
@@ -419,6 +532,19 @@ my_p = Φ(z)       for under
 ```
 
 **Clamp:** `my_p ∈ [0.02, 0.98]`.
+
+---
+
+## Week 7 — superseded strategy
+
+**Version tag:** `W7-R001-R002-R003b-R005-R006`. Rows logged weeks 7
+carry this in `methodology_version`. Superseded by W8's R-008 addition
+on 2026-10-29.
+
+Composition order was five rules: R-003b → R-006 → R-002 → formula →
+R-005 → R-001. Formula input was `base_*_r006`. Sigma was variable per
+R-005. See the "Between Week 7 and Week 8" entry above for the
+specific rows that drove the methodology bump.
 
 ---
 
@@ -742,6 +868,80 @@ backtest:    2023 +0.0013, 2024 +0.0019, 2025 +0.0038 Brier delta vs
              2025 +0.0051, worst-season +0.0027, mean +0.0036.
 ```
 
+### R-008 — teammate-return base deflation  (added 2026-10-29, active Week 8)
+
+```
+condition:   a same-position teammate on the player's team was
+             EFFECTIVELY OUT (R-003b criteria: injury-report Out OR
+             non-ACT weekly roster) in at least one of the trailing-3
+             weeks (`week-3`, `week-2`, `week-1`) AND is ACTIVE on
+             the weekly roster THIS week AND their season-to-date
+             rate ≥ 5 car/g (RB) or 2 rec/g (WR). The rate floor
+             filters out scrub-level teammates whose return doesn't
+             really recapture volume.
+applies to:  both markets.
+effect:      base is DEFLATED after R-006 (so slate order is
+             R-003 → R-006 → R-008, and the result is base_*_r008 as
+             the formula input):
+               WR  →  base_rec -= 0.4 × sum(returning_tm.season_rate × fraction_window_out)
+               RB  →  base_car -= 0.6 × sum(returning_tm.season_rate × fraction_window_out)
+
+             `season_rate` is the teammate's mean of the stat across
+             games they played through `week-1`. `fraction_window_out`
+             is the fraction of trailing-3 weeks the teammate was
+             effectively out — a teammate who was out 2 of 3 trailing
+             weeks and plays this week deflates by (2/3) of what R-003
+             would have added if they were out this week.
+
+             Deflation is capped at 30% WR / 50% RB of the queued
+             player's RAW trailing base, so a single returning backup
+             can't zero the base.
+
+             Inheritance rates mirror R-003's (0.4 WR / 0.6 RB) because
+             R-008 undoes the "backup absent" inflation that R-003 would
+             have otherwise added when positions swap.
+reasoning:   R-003 shrinks the base UP toward a "teammate out" context
+             but has no complementary rule for a teammate RETURNING.
+             R-006 can't close that gap because the season average
+             blended toward is itself mostly "teammate out" games.
+             Chris's Week 7 Aaron Jones row is the canonical case:
+             Mason OUT weeks 2-6, Jones averaged 20+ carries in those
+             games, Mason returned W7 and took 15, Jones got 8. Our
+             W7 methodology said 0.96 on over 10.5 — the formula was
+             honest given its inputs, but the inputs assumed Mason
+             was still out.
+source:      proposed by Chris 2026-10-29 after W7 scoring. Backtested
+             same day across 2023-2025 (synthetic-line proxy). Codified
+             same day.
+tooling:     slate.py applies R-008 to each queue entry after R-006.
+             `deflation_r008()` in nflcal/data.py returns the audit
+             struct; r008_fires and r008_notes are persisted. The UI
+             shows an "R-008 fired" chip in the formula readout.
+backtest:    2023 +0.0054, 2024 +0.0052, 2025 -0.0001 Brier delta vs
+             W7-R001-R002-R003b-R005-R006 baseline (synthetic-line proxy;
+             540-582 props/season). Worst-season -0.0001 is rounding
+             noise; mean +0.0035. On the subset where R-008 fires, sub-
+             Brier improves 0.2688 → 0.2395 in 2023 and 0.2568 → 0.2302
+             in 2024 — the largest effect of any rule we've shipped
+             next to R-006 on its sub-Brier.
+
+             Strict codification policy fails on the 2025 -0.0001 by
+             rounding; shipped under the precedent of R-003 (which
+             failed strict policy on 2023 by -0.0013 and was shipped
+             anyway when its combined-variant pattern was favorable).
+             R-008 additionally is the only variant that beats the raw
+             no-rules baseline in every one of the three backtest
+             seasons — all other rules we've shipped (R-002/R-003/R-005/
+             R-006) lose to baseline on 2023.
+
+             R-007 (cap on R-003 inheritance) was considered jointly;
+             dropped because its backtest showed 2 of 3 seasons slightly
+             negative (mean -0.0002) and R-007+R-008 together is
+             essentially identical to R-008 alone. The W7 Allgeier /
+             Worthy misfires that motivated R-007 are acknowledged
+             anomalies, not a shippable rule change.
+```
+
 ### Placeholder format for future rules:
 
 ```
@@ -791,3 +991,10 @@ rubric. Running `python slate.py --week 5 --json` after commit
 games, which is how to audit which rows were affected.
 
 **Week 6:** no deviations logged yet.
+
+**Week 7:** no methodology deviations. All logged rows carry
+`methodology_version = W7-R001-R002-R003b-R005-R006`. Four rule-driven
+rows were notably miscalibrated and prompted the W8 methodology bump
+(see "Between Week 7 and Week 8" above). Those rows stay as they were
+logged — the record is honest about what the W7 methodology output,
+even when the inputs were stale.

@@ -31,8 +31,8 @@ from __future__ import annotations
 import math
 import sys
 
-# Constants — must match METHODOLOGY.md Week 7 AND ui.html's METHODOLOGY block.
-METH_VER = "W7-R001-R002-R003b-R005-R006"
+# Constants — must match METHODOLOGY.md Week 8 AND ui.html's METHODOLOGY block.
+METH_VER = "W8-R001-R002-R003b-R005-R006-R008"
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
 SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}
 SHRINK_FACTOR = 0.5
@@ -165,8 +165,8 @@ def one_prop() -> None:
                  choices=("rushing", "receiving", "r", "rec"))
     market = "rushing" if market in ("rushing", "r") else "receiving"
     side = ask("side (over/under)", str.lower, choices=("over", "under"))
-    base = ask("base (post-R-003 post-R-006 base from queue: "
-               "base_car_r006 for rushing, base_rec_r006 for receiving)", float)
+    base = ask("base (post-R-003 post-R-006 post-R-008 base from queue: "
+               "base_car_r008 for rushing, base_rec_r008 for receiving)", float)
     pace = ask("pace (team plays/game from queue)", float)
     usage_factor = ask("usage_factor", float, default=1.0)
     pass_rank_opp = ask("pass_def_rank_opp (1=best D, blank if unknown)",
@@ -178,8 +178,8 @@ def one_prop() -> None:
     sigma = result["sigma_eff"]
     threshold = SHRINK_THRESHOLD[market]
 
-    # Composition: R-003 is already baked into `base` (user typed the
-    # queue's base_*_r006 value, which is R-003 then R-006 blended).
+    # Composition: R-003, R-006, and R-008 are already baked into `base`
+    # (user typed the queue's base_*_r008 value: R-003 → R-006 → R-008).
     # R-002 populates matchup_adjust. Formula then runs with R-005's
     # sigma scaling, and R-001 shrinks against the (fresh) base.
     result = compute_myp(market, side, base, pace, line,

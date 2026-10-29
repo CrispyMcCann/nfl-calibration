@@ -17,7 +17,7 @@ with `NaN` on merge.
 
 ## Column order and types
 
-**66 columns, in this exact order.** Do not reorder; downstream tools
+**70 columns, in this exact order.** Do not reorder; downstream tools
 (and human readers of the CSV) rely on it. New columns go at the end
 of the appropriate semantic group (identifiers, mechanism, prediction,
 price, controls, audit, formula audit, outcome).
@@ -168,18 +168,40 @@ market risks double-counting.
 ### R-006 audit (4) — small-N blend of trailing-3 base toward season avg
 
 Appended at positions 63–66 for the W7 methodology bump. `base_*_r006`
-is the FORMULA INPUT on W7+ rows (equal to `base_*_r003` when R-006
-does not fire; otherwise it is `base_*_r003` blended toward the
-player's season-to-date average, weighted `gms/3`). The slate applies
+was the FORMULA INPUT on W7 rows (equal to `base_*_r003` when R-006 does
+not fire; otherwise it is `base_*_r003` blended toward the player's
+season-to-date average, weighted `gms/3`). On W8+ rows the formula input
+is `base_*_r008` (one more composition step on top). The slate applies
 R-003 first, then R-006, so when both fire the elevated base is what
 gets blended. `r006_fires` is True whenever `gms < 3`.
 
 | # | column | type | notes |
 |---|---|---|---|
-| 63 | `base_rec_r006` | float | post-R-003 post-R-006 receiving base; formula input |
-| 64 | `base_car_r006` | float | post-R-003 post-R-006 rushing base; formula input |
+| 63 | `base_rec_r006` | float | post-R-003 post-R-006 receiving base |
+| 64 | `base_car_r006` | float | post-R-003 post-R-006 rushing base |
 | 65 | `r006_fires` | bool-as-string | `True` if the trailing-3 base was blended (i.e., trailing window had `gms < 3`) |
 | 66 | `r006_notes` | string | audit string naming the trailing base, season average, gms count, and blend weights. Empty when R-006 doesn't fire. |
+
+### R-008 audit (4) — backup-return deflation
+
+Appended at positions 67–70 for the W8 methodology bump. `base_*_r008`
+is the FORMULA INPUT on W8+ rows (equal to `base_*_r006` when R-008 does
+not fire). R-008 is the mirror of R-003: it fires when a same-position
+teammate was **effectively out** (R-003b criteria) in at least one of
+the trailing-3 weeks AND is active this week, meaning the queued player's
+trailing base is inflated by the share of volume that will now be
+reclaimed by the returning teammate. Composition: slate.py applies R-003
+first, then R-006, then R-008; the deflation uses the teammate's
+season-to-date rate across games they played, scaled by the fraction of
+trailing-3 weeks they were out and the position-specific inheritance
+rate (0.4 WR / 0.6 RB), capped at 30%/50% of the raw trailing base.
+
+| # | column | type | notes |
+|---|---|---|---|
+| 67 | `base_rec_r008` | float | post-R-003 post-R-006 post-R-008 receiving base; formula input |
+| 68 | `base_car_r008` | float | post-R-003 post-R-006 post-R-008 rushing base; formula input |
+| 69 | `r008_fires` | bool-as-string | `True` if R-008 deflated the base this row |
+| 70 | `r008_notes` | string | audit string naming each returning teammate, their fraction of trailing weeks out, their season rate, and the applied deflation. Empty when R-008 doesn't fire. |
 
 ---
 
@@ -219,12 +241,12 @@ UI when a queued prop is skipped. Never hand-edit `outcome`.
 
 | writer | new rows | existing rows |
 |---|---|---|
-| UI (queue) | all columns 1–41, 47–49, 50–56, 57–62, and 63–66 (methodology computes 47–49 at log time; 50–66 are carried from the slate stub) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
-| UI (manual) | columns 1–41, 47–49, 50–56, 57–62, and 63–66 where the slate provides them | same |
-| UI (skip) | columns 1–14, 29–41, 50–56, 57–62, 63–66, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
-| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–66 left blank (CLI has no methodology integration) | never |
+| UI (queue) | all columns 1–41, 47–49, 50–56, 57–62, 63–66, and 67–70 (methodology computes 47–49 at log time; 50–70 are carried from the slate stub) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
+| UI (manual) | columns 1–41, 47–49, 50–56, 57–62, 63–66, and 67–70 where the slate provides them | same |
+| UI (skip) | columns 1–14, 29–41, 50–56, 57–62, 63–66, 67–70, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
+| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–70 left blank (CLI has no methodology integration) | never |
 | `resolve.py` | never | `actual` (44), `outcome` (45), `resolved_at` (46) |
-| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills trailing columns (47–49, 50–56, 57–62, and 63–66) as empty when reading a predictions.csv that pre-dates them |
+| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills trailing columns (47–49, 50–56, 57–62, 63–66, and 67–70) as empty when reading a predictions.csv that pre-dates them |
 | `slate.py` | never | never — read-only |
 | `score.py` | never | never — read-only |
 

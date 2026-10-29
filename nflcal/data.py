@@ -486,6 +486,137 @@ def blend_small_n(base: float, season_avg_: float | None, gms: int) -> float:
     return w * float(base or 0) + (1.0 - w) * float(season_avg_)
 
 
+# R-008 constants. Deflation cap matches the symmetric magnitude a would-be
+# R-007 would have applied on R-003's elevation; capping at the raw trailing
+# base keeps a single returning backup from zeroing the queued player's base.
+R008_CAP_REC = 0.30   # WR: deflation capped at 30% of raw trailing-rec base
+R008_CAP_CAR = 0.50   # RB: deflation capped at 50% of raw trailing-car base
+R008_MIN_RATE_RB = 5.0  # ignore returning backups with <5 car/g (noise filter)
+R008_MIN_RATE_WR = 2.0  # ignore returning backups with <2 rec/g
+
+
+def _frac_window_out(season: int, team: str, position: str,
+                     trailing_weeks: list[int], name: str) -> float:
+    """Fraction of trailing_weeks in which `name` was effectively out for
+    `team` at `position`. Uses R-003b's union-of-signals per week."""
+    if not trailing_weeks:
+        return 0.0
+    out_count = 0
+    for wk in trailing_weeks:
+        try:
+            out_map = _effectively_out(season, int(wk), team, position)
+            if name in out_map:
+                out_count += 1
+        except Exception:
+            pass
+    return out_count / len(trailing_weeks)
+
+
+def _backup_rate(season: int, name: str, through_week: int,
+                 market: str) -> float | None:
+    """Season-to-date rate for `name` across games they played through
+    `through_week`. R-008 uses this as the deflation magnitude — the
+    volume the queued player's trailing base was inflated by, now that
+    this teammate is back on the field."""
+    ps = _player_stats(season)
+    hit = ps[(ps.player_display_name == name) & (ps.week <= through_week)]
+    if hit.empty:
+        return None
+    col = hit.carries if market == "rushing" else hit.receptions
+    return float(col.mean())
+
+
+def deflation_r008(season: int, week: int, team: str, position: str,
+                   queued_player: str,
+                   base_rec_r006: float, base_car_r006: float,
+                   base_rec_raw: float, base_car_raw: float) -> dict:
+    """R-008 backup-return deflation. The mirror of R-003.
+
+    Fires when a same-position teammate was **effectively out** (R-003b
+    criteria: injury-report Out OR non-ACT weekly roster) in at least one
+    of the trailing-3 weeks (`week-3`, `week-2`, `week-1`) AND is ACTIVE
+    this week — meaning the queued player's trailing-3 base is inflated
+    by a share of volume that will now be reclaimed by the returning
+    teammate.
+
+    Deflation magnitude mirrors R-003:
+      WR : base_rec -= 0.4 × teammate.season_rate × fraction_window_out
+      RB : base_car -= 0.6 × teammate.season_rate × fraction_window_out
+
+    `teammate.season_rate` is the backup's mean across games they played
+    through `week-1`. Backups with 0 games played get skipped (we have
+    no rate to use). Rates below the min-rate floor (5 car/g for RB,
+    2 rec/g for WR) are skipped to avoid noise from scrub-level
+    teammates whose return doesn't really recapture volume.
+
+    Deflation is capped at R-008's own symmetric caps (30% WR / 50% RB
+    of the RAW trailing base) so a single returning backup can't zero
+    the queued player's base.
+
+    Applied in slate.py AFTER R-006 — the deflation is the final adjustment
+    to the formula input, correcting whatever the trailing-base + R-006
+    blend produced for the "backup absent" context into the "backup
+    present" context the game will be played under.
+
+    Returns {"base_rec", "base_car", "fires", "notes"}.
+    """
+    quiet = {"base_rec": round(float(base_rec_r006 or 0), 2),
+             "base_car": round(float(base_car_r006 or 0), 2),
+             "fires": False, "notes": ""}
+    if week <= 3:
+        return quiet
+    trailing_weeks = [week - 3, week - 2, week - 1]
+
+    try:
+        rw = _rosters_weekly(season)
+        hit = rw[(rw.week == week) & (rw.team == team)
+                 & (rw.position == position) & (rw.status == "ACT")]
+        candidates = set(hit.full_name.dropna().astype(str)) - {queued_player}
+    except Exception:
+        candidates = set()
+    if not candidates:
+        return quiet
+
+    inherit = 0.6 if position == "RB" else 0.4
+    market = "rushing" if position == "RB" else "receiving"
+    min_rate = R008_MIN_RATE_RB if position == "RB" else R008_MIN_RATE_WR
+
+    deflate_rec, deflate_car, notes = 0.0, 0.0, []
+    for tm in sorted(candidates):
+        frac = _frac_window_out(season, team, position, trailing_weeks, tm)
+        if frac <= 0:
+            continue
+        rate = _backup_rate(season, tm, week - 1, market)
+        if rate is None or rate < min_rate:
+            continue
+        amt = inherit * rate * frac
+        if position == "RB":
+            deflate_car += amt
+            notes.append(f"{tm} returned (out {frac:.0%} of trailing); "
+                         f"-{inherit} × {rate:.1f} car/g × {frac:.2f}")
+        elif position == "WR":
+            deflate_rec += amt
+            notes.append(f"{tm} returned (out {frac:.0%} of trailing); "
+                         f"-{inherit} × {rate:.1f} rec/g × {frac:.2f}")
+
+    cap_rec = R008_CAP_REC * float(base_rec_raw or 0)
+    cap_car = R008_CAP_CAR * float(base_car_raw or 0)
+    if cap_rec > 0:
+        deflate_rec = min(deflate_rec, cap_rec)
+    if cap_car > 0:
+        deflate_car = min(deflate_car, cap_car)
+
+    if not notes:
+        return quiet
+
+    return {
+        "base_rec": round(max(0.0, float(base_rec_r006 or 0) - deflate_rec), 2),
+        "base_car": round(max(0.0, float(base_car_r006 or 0) - deflate_car), 2),
+        "fires": True,
+        "notes": "; ".join(notes),
+    }
+
+
 def upcoming(season: int, week: int) -> pd.DataFrame:
     s = _schedules(season)
     return s[(s.week == week)].copy()

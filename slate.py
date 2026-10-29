@@ -207,6 +207,23 @@ def main():
                                   f"car {elev['base_car']:.1f}->{base_car_r006:.1f})")
                 else:
                     r006_notes = ""
+                # R-008 (W8): backup-return deflation. Applied AFTER R-006,
+                # mirrors R-003 in reverse. When a same-position teammate was
+                # effectively out in some of the trailing-3 weeks but is
+                # ACTIVE this week, the queued player's trailing base is
+                # inflated by their missing teammate's share — deflate it so
+                # the formula input reflects the "backup-present" context the
+                # game will be played under. base_*_r008 is the FORMULA INPUT
+                # for W8+ rows (equals base_*_r006 when R-008 doesn't fire).
+                defl = D.deflation_r008(
+                    SEASON, week, team, pos, pl["name"],
+                    base_rec_r006, base_car_r006,
+                    float(pl.get("rec", 0.0) or 0),
+                    float(pl.get("car", 0.0) or 0))
+                base_rec_r008 = defl["base_rec"]
+                base_car_r008 = defl["base_car"]
+                r008_fires = defl["fires"]
+                r008_notes = defl["notes"]
                 is_home = entry["game"].split(" @ ")[1] == team
                 return {"game": entry["game"], "game_date": entry["date"],
                         "kickoff": entry["kickoff"],
@@ -249,13 +266,19 @@ def main():
                         "pass_off_rank_opp": pass_off_opp,
                         "rush_off_rank_opp": rush_off_opp,
                         # --- R-006 (small-N blend). base_*_r006 is the
-                        # FORMULA INPUT on W7+. Equals base_*_r003 when
-                        # the player played all 3 games in the trailing
-                        # window (r006_fires=False).
+                        # post-R-003 post-R-006 base; the W8+ formula reads
+                        # base_*_r008 (one more step on top) as its input.
                         "base_rec_r006": base_rec_r006,
                         "base_car_r006": base_car_r006,
                         "r006_fires": r006_fires,
-                        "r006_notes": r006_notes}
+                        "r006_notes": r006_notes,
+                        # --- R-008 (backup-return deflation). FORMULA INPUT
+                        # on W8+ rows. Equals base_*_r006 when R-008 doesn't
+                        # fire (no returning teammate in the trailing window).
+                        "base_rec_r008": base_rec_r008,
+                        "base_car_r008": base_car_r008,
+                        "r008_fires": r008_fires,
+                        "r008_notes": r008_notes}
 
             # Queue uses the depth-chart-aware picker so an injured WR1 who
             # missed the trailing-3 window does not cede the slot to a WR2
