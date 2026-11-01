@@ -185,12 +185,9 @@ def main():
                                         pl.get("rec", 0.0),
                                         pl.get("car", 0.0),
                                         exclude_player=pl["name"])
-                # R-006 small-N blend (W7). When the player's trailing-3
-                # window saw gms<3 (missed games), blend their R-003-
-                # elevated base toward their season-to-date average.
-                # Fires in the slate so the UI/calc.py read a single
-                # fully-composed base (base_*_r006). gms>=3 → no-op,
-                # base_*_r006 == base_*_r003.
+                # R-006 (retired W9) kept for the audit column only; it no
+                # longer feeds the formula on W9+ rows. For legacy UI
+                # readout we still show the thin-sample blend.
                 pl_gms = int(pl.get("gms") or 0)
                 sa_rec = D.season_avg(SEASON, pl["name"], week - 1, "receiving")
                 sa_car = D.season_avg(SEASON, pl["name"], week - 1, "rushing")
@@ -207,17 +204,51 @@ def main():
                                   f"car {elev['base_car']:.1f}->{base_car_r006:.1f})")
                 else:
                     r006_notes = ""
-                # R-008 (W8): backup-return deflation. Applied AFTER R-006,
-                # mirrors R-003 in reverse. When a same-position teammate was
-                # effectively out in some of the trailing-3 weeks but is
-                # ACTIVE this week, the queued player's trailing base is
-                # inflated by their missing teammate's share — deflate it so
-                # the formula input reflects the "backup-present" context the
-                # game will be played under. base_*_r008 is the FORMULA INPUT
-                # for W8+ rows (equals base_*_r006 when R-008 doesn't fire).
+                # R-010 (W9): empirical-Bayes base. Shrinks the current-
+                # season observation toward prior-season full-year (or
+                # positional mean for rookies) with pseudo-count = halflife
+                # (29.5 RB / 13.5 WR); blends with trailing-3 for recency.
+                # Applied to the R-003-elevated trailing mean so inheritance
+                # from an OUT teammate stays in the mix.
+                season_n_rec = D.season_games(SEASON, pl["name"], week - 1)
+                season_n_car = season_n_rec   # same n for both markets
+                prior_rec_mean, prior_rec_n = D.prior_full_season(
+                    SEASON, pl["name"], "receiving")
+                prior_car_mean, prior_car_n = D.prior_full_season(
+                    SEASON, pl["name"], "rushing")
+                base_rec_r010 = round(D.ebayes_base(
+                    elev["base_rec"], pl_gms,
+                    sa_rec, season_n_rec,
+                    prior_rec_mean, prior_rec_n,
+                    pos), 2)
+                base_car_r010 = round(D.ebayes_base(
+                    elev["base_car"], pl_gms,
+                    sa_car, season_n_car,
+                    prior_car_mean, prior_car_n,
+                    pos), 2)
+                # Fire-flag: whether the shrinkage moved the base meaningfully
+                # (>5% change from R-003 output). Rookie-fallback-only also fires.
+                def _r010_fired(before: float, after: float) -> bool:
+                    if abs(before) < 1e-6:
+                        return abs(after) > 1e-6
+                    return abs(after - before) / abs(before) > 0.05
+                r010_fires = (_r010_fired(elev["base_rec"], base_rec_r010)
+                              or _r010_fired(elev["base_car"], base_car_r010))
+                if r010_fires:
+                    prior_tag = "prior" if (prior_car_n >= 5 or prior_rec_n >= 5) else "pos-prior"
+                    r010_notes = (f"ebayes[{prior_tag}, k={29.5 if pos=='RB' else 13.5}]: "
+                                  f"rec {elev['base_rec']:.1f}->{base_rec_r010:.1f}, "
+                                  f"car {elev['base_car']:.1f}->{base_car_r010:.1f} "
+                                  f"(trail n={pl_gms}, cur n={season_n_rec}, "
+                                  f"prior n={max(prior_rec_n, prior_car_n)})")
+                else:
+                    r010_notes = ""
+                # R-008 (W8+): backup-return deflation. On W9+ it operates on
+                # the R-010 output (ebayes-shrunk base). Mirrors R-003 in
+                # reverse.
                 defl = D.deflation_r008(
                     SEASON, week, team, pos, pl["name"],
-                    base_rec_r006, base_car_r006,
+                    base_rec_r010, base_car_r010,
                     float(pl.get("rec", 0.0) or 0),
                     float(pl.get("car", 0.0) or 0))
                 base_rec_r008 = defl["base_rec"]
@@ -265,16 +296,25 @@ def main():
                         "own_rush_off_rank": own_rush_off,
                         "pass_off_rank_opp": pass_off_opp,
                         "rush_off_rank_opp": rush_off_opp,
-                        # --- R-006 (small-N blend). base_*_r006 is the
-                        # post-R-003 post-R-006 base; the W8+ formula reads
-                        # base_*_r008 (one more step on top) as its input.
+                        # --- R-006 (retired W9). Kept for audit continuity;
+                        # no longer a formula input. The W9 formula reads
+                        # base_*_r008 which stacks on top of base_*_r010.
                         "base_rec_r006": base_rec_r006,
                         "base_car_r006": base_car_r006,
                         "r006_fires": r006_fires,
                         "r006_notes": r006_notes,
+                        # --- R-010 (W9+): empirical-Bayes shrinkage. Replaces
+                        # R-006. base_*_r010 is R-003-elevated-trailing
+                        # shrunk toward prior-season (or positional
+                        # fallback) with pseudo-count = Efron-Morris halflife.
+                        # R-008 operates on this value.
+                        "base_rec_r010": base_rec_r010,
+                        "base_car_r010": base_car_r010,
+                        "r010_fires": r010_fires,
+                        "r010_notes": r010_notes,
                         # --- R-008 (backup-return deflation). FORMULA INPUT
-                        # on W8+ rows. Equals base_*_r006 when R-008 doesn't
-                        # fire (no returning teammate in the trailing window).
+                        # on W8+ rows. On W9+ equals base_*_r010 when R-008
+                        # doesn't fire.
                         "base_rec_r008": base_rec_r008,
                         "base_car_r008": base_car_r008,
                         "r008_fires": r008_fires,

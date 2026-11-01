@@ -17,7 +17,7 @@ with `NaN` on merge.
 
 ## Column order and types
 
-**70 columns, in this exact order.** Do not reorder; downstream tools
+**74 columns, in this exact order.** Do not reorder; downstream tools
 (and human readers of the CSV) rely on it. New columns go at the end
 of the appropriate semantic group (identifiers, mechanism, prediction,
 price, controls, audit, formula audit, outcome).
@@ -185,23 +185,42 @@ gets blended. `r006_fires` is True whenever `gms < 3`.
 ### R-008 audit (4) — backup-return deflation
 
 Appended at positions 67–70 for the W8 methodology bump. `base_*_r008`
-is the FORMULA INPUT on W8+ rows (equal to `base_*_r006` when R-008 does
-not fire). R-008 is the mirror of R-003: it fires when a same-position
-teammate was **effectively out** (R-003b criteria) in at least one of
-the trailing-3 weeks AND is active this week, meaning the queued player's
-trailing base is inflated by the share of volume that will now be
-reclaimed by the returning teammate. Composition: slate.py applies R-003
-first, then R-006, then R-008; the deflation uses the teammate's
-season-to-date rate across games they played, scaled by the fraction of
-trailing-3 weeks they were out and the position-specific inheritance
-rate (0.4 WR / 0.6 RB), capped at 30%/50% of the raw trailing base.
+is the FORMULA INPUT on W8+ rows. On W8 rows R-008 operates on
+`base_*_r006` (previous composition). On W9+ rows R-008 operates on
+`base_*_r010` (the empirical-Bayes shrunk base). R-008 is the mirror of
+R-003: it fires when a same-position teammate was **effectively out**
+(R-003b criteria) in at least one of the trailing-3 weeks AND is active
+this week.
 
 | # | column | type | notes |
 |---|---|---|---|
-| 67 | `base_rec_r008` | float | post-R-003 post-R-006 post-R-008 receiving base; formula input |
-| 68 | `base_car_r008` | float | post-R-003 post-R-006 post-R-008 rushing base; formula input |
+| 67 | `base_rec_r008` | float | post-R-008 receiving base; formula input on W8+ |
+| 68 | `base_car_r008` | float | post-R-008 rushing base; formula input on W8+ |
 | 69 | `r008_fires` | bool-as-string | `True` if R-008 deflated the base this row |
 | 70 | `r008_notes` | string | audit string naming each returning teammate, their fraction of trailing weeks out, their season rate, and the applied deflation. Empty when R-008 doesn't fire. |
+
+### R-010 audit (4) — empirical-Bayes base
+
+Appended at positions 71–74 for the W9 methodology bump. R-010 replaces
+R-006 on W9+ rows: it shrinks the current-season observation toward
+the player's prior-season full-year average with pseudo-count = Efron-
+Morris regression halflife (29.5 games for RBs, 13.5 for WRs; from
+Bleacher Report / Footballguys literature). When no prior-season data
+exists (rookies), the fallback is a positional league-mean prior
+(RB1 ≈ 14 car/g, WR1 ≈ 5 rec/g). The shrunk current-season estimate is
+then blended with the R-003-elevated trailing-3 base using a recency
+pseudo-count of halflife/2.
+
+On W9+ rows R-008 operates on `base_*_r010`, not on `base_*_r006`.
+R-006 is still populated in columns 63–66 for continuity but is no
+longer a formula input.
+
+| # | column | type | notes |
+|---|---|---|---|
+| 71 | `base_rec_r010` | float | post-R-003 post-R-010 receiving base; R-008 input on W9+ |
+| 72 | `base_car_r010` | float | post-R-003 post-R-010 rushing base; R-008 input on W9+ |
+| 73 | `r010_fires` | bool-as-string | `True` when R-010 moved the base by more than 5% from R-003 output (nominal shrinkage). False only when the shrinkage result exactly matched R-003 output. |
+| 74 | `r010_notes` | string | audit string naming the prior source (`prior` for previous-season full-year, `pos-prior` for the positional fallback), the halflife, the pre/post bases, and the sample sizes used in the blend. Empty when R-010 doesn't fire. |
 
 ---
 
@@ -241,12 +260,12 @@ UI when a queued prop is skipped. Never hand-edit `outcome`.
 
 | writer | new rows | existing rows |
 |---|---|---|
-| UI (queue) | all columns 1–41, 47–49, 50–56, 57–62, 63–66, and 67–70 (methodology computes 47–49 at log time; 50–70 are carried from the slate stub) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
-| UI (manual) | columns 1–41, 47–49, 50–56, 57–62, 63–66, and 67–70 where the slate provides them | same |
-| UI (skip) | columns 1–14, 29–41, 50–56, 57–62, 63–66, 67–70, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
-| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–70 left blank (CLI has no methodology integration) | never |
+| UI (queue) | all columns 1–41, 47–49, 50–56, 57–62, 63–66, 67–70, and 71–74 (methodology computes 47–49 at log time; 50–74 are carried from the slate stub) | `close_*` (24–28); before kickoff, an amendment rewrites `line`, `my_p`, `why`, `odds`, `opp_odds`, `market_p`, `edge` (and recomputes 47–49) and appends the old values to `amendments` (43) |
+| UI (manual) | columns 1–41, 47–49, 50–56, 57–62, 63–66, 67–70, and 71–74 where the slate provides them | same |
+| UI (skip) | columns 1–14, 29–41, 50–56, 57–62, 63–66, 67–70, 71–74, `skip_reason` (42), `outcome="skip"`; 47–49 left blank | never |
+| `log.py` CLI | columns 1–23, controls it has access to (29–41 where the slate provides them); 47–74 left blank (CLI has no methodology integration) | never |
 | `resolve.py` | never | `actual` (44), `outcome` (45), `resolved_at` (46) |
-| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills trailing columns (47–49, 50–56, 57–62, 63–66, and 67–70) as empty when reading a predictions.csv that pre-dates them |
+| `merge.py` | carries UI rows into `predictions.csv` | carries UI's close prices and pre-kickoff amendments (including recomputed 47–49); never touches 44–46 once filled, never erases a close, refuses anything else; backfills trailing columns (47–49, 50–56, 57–62, 63–66, 67–70, and 71–74) as empty when reading a predictions.csv that pre-dates them |
 | `slate.py` | never | never — read-only |
 | `score.py` | never | never — read-only |
 

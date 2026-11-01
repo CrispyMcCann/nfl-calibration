@@ -31,11 +31,11 @@ from __future__ import annotations
 import math
 import sys
 
-# Constants — must match METHODOLOGY.md Week 8 AND ui.html's METHODOLOGY block.
-METH_VER = "W8-R001-R002-R003b-R005-R006-R008"
+# Constants — must match METHODOLOGY.md Week 9 AND ui.html's METHODOLOGY block.
+METH_VER = "W9-R002-R003b-R005b-R008-R010"
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
-SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}
-SHRINK_FACTOR = 0.5
+SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}  # retired W9 (R-001 dropped)
+SHRINK_FACTOR = 0.5                                   # retired W9 (R-001 dropped)
 
 # R-002 constants. Position-specific EPA-allowed rank: 1 = best defense,
 # 32 = worst. Bottom-K defenses get bumped UP (easier matchup → more
@@ -44,13 +44,15 @@ MATCHUP_BUMP = {"rushing": 1.0, "receiving": 0.5}
 MATCHUP_WORST_K = 8
 MATCHUP_BEST_K = 8
 
-# R-005: variable-sigma scaling. sigma_eff = max(SIGMA[market], base × k).
-# For a slot WR (base ~5), the SIGMA floor binds. For a WR1 on a hot
-# stretch (base ~13), sigma scales up (13 × 0.30 = 3.9), which widens the
-# distribution and softens the formula's over-confidence on high-base
-# props — the Nacua Week 6 class of case. Value chosen from first-principle
-# empirical variance/base ratio across the backtested seasons.
-SIGMA_SCALE = 0.30
+# R-005' (W9) upgraded variable-sigma scaling. Per-position after the
+# W9 ship: field-median CV values from PlayerProfiler's Variance
+# Manifesto (RB ~0.5-0.6, WR ~0.6-0.7). sigma_eff = max(SIGMA[market],
+# base × SIGMA_SCALE[position]).
+#   - RB floor binds for base < 9.17 car/g; scale binds above.
+#   - WR floor binds for base < 3.85 rec/g; scale binds above.
+SIGMA_SCALE = {"RB": 0.60, "WR": 0.65}
+# Legacy backtest callers that pass a scalar sigma_scale (e.g.,
+# validate.py's sweep) still work — compute_myp accepts a float too.
 
 
 def phi(z: float) -> float:
@@ -80,29 +82,39 @@ def compute_myp(market: str, side: str, base: float, pace: float,
                 rush_rank_opp: int | None = None,
                 usage_factor: float = 1.0,
                 apply_r002: bool = True,
-                apply_r001: bool = True,
-                sigma_scale: float = 0.0) -> dict:
-    """Pure form of the Week 6 probability formula. `one_prop` is the
-    interactive wrapper around this; validate.py's --mode brier reuses it
-    to backtest variants (apply_r001/apply_r002 off = earlier methodologies;
-    sigma_scale > 0 = R-005 variable-sigma candidate).
+                apply_r001: bool = False,
+                sigma_scale: float | None = None,
+                position: str | None = None) -> dict:
+    """Pure form of the Week 9 probability formula. `one_prop` is the
+    interactive wrapper; validate.py reuses it to backtest variants.
 
-    R-003 is applied in slate.py BEFORE the formula runs — pass the
-    already-elevated base here. For backtesting a baseline that doesn't
-    include R-003, pass the raw base. The function has no notion of
-    which rule produced `base`.
+    Composition (W9):
+      - `base` is already composed in slate.py as R-003→R-010→R-008 —
+        pass that value here. Backtest variants pass earlier compositions.
+      - R-002 adds a position-specific matchup bump.
+      - R-005' widens sigma using the position-specific SIGMA_SCALE.
+      - R-001 is retired on live methodology; keyword kept for backtest
+        callers that still want to toggle the old threshold shrinkage.
 
-    sigma_scale (R-005 candidate, not codified in live methodology):
-      0.0 → sigma = SIGMA[market] (current behavior)
-      >0  → sigma = max(SIGMA[market], base × sigma_scale). Floor binds for
-            low-base props; scale binds for high-base ones. The backtest
-            uses this; live calc/UI do not until codification.
+    sigma_scale:
+      - None (default): live W9 behavior — use SIGMA_SCALE[position];
+        defaults to RB value if position missing.
+      - 0.0: pre-W7 behavior — fixed SIGMA_floor only.
+      - >0 float: explicit override (backtest sweeps).
 
     Returns {my_p, expected, raw_expected, deviation, r001_fired,
              r002_fired, matchup_adjust, sigma_eff}.
     """
     sigma_base = SIGMA[market]
-    sigma_eff = max(sigma_base, base * sigma_scale) if sigma_scale > 0 else sigma_base
+    if sigma_scale is None:
+        # Live W9: per-position SIGMA_SCALE. Default to RB if caller
+        # omitted position (safer wider sigma).
+        sc = SIGMA_SCALE["WR" if position == "WR" else "RB"]
+        sigma_eff = max(sigma_base, base * sc)
+    elif sigma_scale > 0:
+        sigma_eff = max(sigma_base, base * sigma_scale)
+    else:
+        sigma_eff = sigma_base
     threshold = SHRINK_THRESHOLD[market]
     matchup_adjust = matchup_adjust_r002(market, pass_rank_opp, rush_rank_opp) \
         if apply_r002 else 0.0
@@ -165,8 +177,10 @@ def one_prop() -> None:
                  choices=("rushing", "receiving", "r", "rec"))
     market = "rushing" if market in ("rushing", "r") else "receiving"
     side = ask("side (over/under)", str.lower, choices=("over", "under"))
-    base = ask("base (post-R-003 post-R-006 post-R-008 base from queue: "
+    base = ask("base (post-R-003 post-R-010 post-R-008 base from queue: "
                "base_car_r008 for rushing, base_rec_r008 for receiving)", float)
+    pos = ask("position (RB/WR for sigma scaling)", str.upper,
+              choices=("RB", "WR"))
     pace = ask("pace (team plays/game from queue)", float)
     usage_factor = ask("usage_factor", float, default=1.0)
     pass_rank_opp = ask("pass_def_rank_opp (1=best D, blank if unknown)",
@@ -175,18 +189,17 @@ def one_prop() -> None:
                         _opt_int, default=None)
     line = ask("line (FanDuel)", float)
 
-    sigma = result["sigma_eff"]
-    threshold = SHRINK_THRESHOLD[market]
-
-    # Composition: R-003, R-006, and R-008 are already baked into `base`
-    # (user typed the queue's base_*_r008 value: R-003 → R-006 → R-008).
+    # Composition: R-003, R-010, and R-008 are already baked into `base`
+    # (user typed the queue's base_*_r008 value: R-003 → R-010 → R-008).
     # R-002 populates matchup_adjust. Formula then runs with R-005's
-    # sigma scaling, and R-001 shrinks against the (fresh) base.
+    # position-specific sigma scaling. R-001 retired on W9.
     result = compute_myp(market, side, base, pace, line,
                          pass_rank_opp=pass_rank_opp,
                          rush_rank_opp=rush_rank_opp,
                          usage_factor=usage_factor,
-                         sigma_scale=SIGMA_SCALE)
+                         position=pos)
+    sigma = result["sigma_eff"]
+    threshold = SHRINK_THRESHOLD[market]
     matchup_adjust = result["matchup_adjust"]
     raw_expected = result["raw_expected"]
     deviation = result["deviation"]
@@ -208,12 +221,10 @@ def one_prop() -> None:
           f" + {matchup_adjust:+.2f}  =  {raw_expected:.3f}")
     print(f"  deviation    = {deviation:+.3f}   "
           f"(threshold ±{threshold:.1f} for {market})")
-    if r001_fired:
-        print(f"  R-001 fires  → expected = {base:.2f} + 0.5×{deviation:+.3f}"
-              f" = {expected:.3f}")
-    else:
-        print(f"  R-001 skipped → expected = raw_expected = {expected:.3f}")
-    print(f"  z            = ({line:.1f} − {expected:.3f}) / {sigma} = {z:+.3f}")
+    print(f"  expected      = raw_expected = {expected:.3f}  (R-001 retired W9)")
+    print(f"  σ_eff (R-005') = {sigma:.3f}  "
+          f"(position={pos}, scale={SIGMA_SCALE[pos]:.2f})")
+    print(f"  z            = ({line:.1f} − {expected:.3f}) / {sigma:.3f} = {z:+.3f}")
     print()
     print(f"  →  enter my_p = {my_p:.4f}   (side = {side})")
     print(f"     p_over = {p_over:.4f}, p_under = {1 - p_over:.4f}")

@@ -30,7 +30,7 @@ The formula below lives in three places that **must stay identical**:
 
 **Change any of them → change all three in the same commit, and bump
 `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`;
-current: `W8-R001-R002-R003b-R005-R006-R008`). Rows logged under the old tag keep it. New rows get
+current: `W9-R002-R003b-R005b-R008-R010`). Rows logged under the old tag keep it. New rows get
 the new tag. The write-up splits calibration by `methodology_version`
 band, so divergence between the three sources silently corrupts the
 record. If you're a future Claude and only one of the three looks like
@@ -465,61 +465,186 @@ If Jones had gone over as logged, Brier 0.10 vs the 0.92 we actually ate.
 
 ---
 
-## Week 8 — the current strategy
+## Between Week 8 and Week 9 — what changed and why (shipped mid-W8)
 
-**Version tag:** `W8-R001-R002-R003b-R005-R006-R008`. Rows logged from
-Week 8 forward carry this in `methodology_version`. Weeks 3–7 keep
-their original tags and are scored under their own methodology.
+Four rows logged for Week 8 TNF (CAR @ GB on 2026-10-29) landed on
+`W8-R001-R002-R003b-R005-R006-R008`. On 2026-11-01, before the Sunday
+slates kicked off, Chris surfaced a live example of overconfidence —
+Bucky Irving over 16.5 car at `my_p = 0.721`, which the formula was
+honestly reporting given its inputs but which clearly didn't match the
+market or the player's full-season context.
 
-**Composition order.** Six rules stack. They are composed in a
-specific order so they don't interfere:
+Trace through Irving:
+- 2026 season through W7: 7 games played, mean 17.1 car/g
+- 2025 prior season: 10 games, mean 17.3 car/g
+- Trailing-3 window (weeks 5-7): 21, 19, 24 → mean 21.3 (outlier hot stretch)
+- Market line: 16.5
+
+The W8 formula computed `base = 20.3` (R-008 Tucker-return deflation
+of the 21.3 trailing mean), `σ = max(5.5, 20.3 × 0.30) = 6.09`,
+`expected = 20.06`, giving `p_over = 0.721`. The market was at 0.514.
+The claimed edge of +0.21 on a liquid market was a signal that
+something in the formula was systematically off.
+
+A sports-stats research pass the day before had already surfaced two
+structural issues that explain this cleanly:
+
+1. **σ_scale = 0.30 is roughly half the field standard.** PlayerProfiler's
+   Variance Manifesto gives CV benchmarks of ~0.5-0.6 for RBs and
+   ~0.6-0.7 for WRs at the fantasy-points level. Volume props are
+   slightly less variable but not dramatically so. The W8 σ was tuned
+   from a backtest sweep that found "σ_scale continues to improve
+   Brier up to 0.70+" — but we dismissed that as regression-to-0.5
+   artifact. The research says the field disagrees: the practitioner
+   consensus is `σ ≈ 0.5-0.7 × base`.
+
+2. **R-006 silently no-ops on returning-from-injury players.** It
+   blends toward *this season's* average, which equals the trailing
+   sample when the player only has a game or two. For Irving, both
+   trailing_mean and season_mean = 17.1, so R-006 doesn't help; worse,
+   the trailing-3 of 21.3 after R-003 inheritance is treated as the
+   correct estimate of his true rate. The Efron-Morris regression
+   literature (Bleacher Report / arXiv NFL win-% paper) is clear:
+   RBs regress ~halfway toward prior-season baseline after ~29.5
+   games. Our 7-of-7-played-this-season sample is far short of that.
+
+A W9 draft slice was formulated on 2026-10-29, backtested the same
+day, and the result was striking:
+
+```
+Table 6 — W9 DRAFT vs current W8 (r008)
+variant     2023      2024      2025      worst     mean
+sigma_up   +0.0114   +0.0059   +0.0102   +0.0059   +0.0091   KEEP
+r010       +0.0112   +0.0051   +0.0039   +0.0039   +0.0067   KEEP
+w9         +0.0129   +0.0064   +0.0106   +0.0064   +0.0099   KEEP
+```
+
+`w9` mean +0.0099 is ≈3× the biggest previous ship (R-005+R-006 at
++0.0036 vs 'all'; R-008 at +0.0035 vs W7). Worst-season +0.0064 vs
+strict policy threshold of −0.0001 — a clean sweep by every metric.
+
+**Mid-week ship rationale.** The record discipline rule says we don't
+ship mid-week. The Irving row broke the symmetry: with a backtest
+already showing +0.0099 and a live row showing exactly the predicted
+failure mode, logging 24 more Sunday+Monday rows under W8 methodology
+would knowingly pollute the record with mis-calibrated numbers. The
+honest move is to ship now, tag W8 TNF as `W8-...` and W8
+Sun+Mon as `W9-...` within the same calendar week. The write-up will
+honor that split explicitly.
+
+**Changes shipped as `W9-R002-R003b-R005b-R008-R010` on 2026-11-01:**
+
+- **R-010 (new):** empirical-Bayes base. Replaces R-006. Shrinks
+  current-season observation toward prior-season full-year with
+  pseudo-count = Efron-Morris halflife (29.5 games for RB, 13.5 for
+  WR). Fallback for rookies / no-prior-year: positional league-mean
+  (RB1 ≈ 14 car/g, WR1 ≈ 5 rec/g). The shrunk estimate is then
+  blended with the R-003-elevated trailing-3 using a recency
+  pseudo-count of halflife/2. See the full registry entry below.
+
+- **R-005' (upgraded):** `SIGMA_SCALE` is now position-specific:
+  `0.60` for RB, `0.65` for WR (up from the single `0.30` constant).
+  Field-median CV values from PlayerProfiler. The floor binds for
+  base < 9.17 car/g RB or 3.85 rec/g WR, meaning the scale is
+  effectively live on nearly every meaningful queue entry.
+
+- **R-001 (retired):** threshold shrinkage fired on only 2% of live
+  rows and was always redundant with R-010's continuous shrinkage.
+  Dropped from the composition entirely to avoid double-shrinking the
+  rare cases where it did fire. If a future candidate needs explicit
+  threshold shrinkage we'll reintroduce it under a new rule number.
+
+- **R-006 (retired as a formula input):** audit columns 63-66 are
+  still populated by `slate.py` for continuity, but they no longer
+  feed the formula. R-010 is the shrinkage mechanism going forward.
+
+- **R-002, R-003b, R-008:** unchanged.
+
+**Composition order for W9:**
+
+```
+raw trailing-3
+  → R-003b (elevate for OUT teammate)
+  → R-010 (ebayes shrink toward prior-season / positional)
+  → R-008 (deflate for RETURNING teammate)
+  → formula: expected = base × (pace/60) + R-002 matchup_bump
+  → R-005' sigma = max(SIGMA_floor, base × SIGMA_SCALE[position])
+```
+
+**Irving recompute under W9 methodology:**
+
+```
+trailing_mean=21.3, trailing_n=3   (weeks 5-7)
+season_mean=17.1,   season_n=7
+prior_mean=17.3,    prior_n=10 (2025)
+k = 29.5 (RB halflife)
+
+shrunk_season = (7×17.1 + 29.5×17.3) / 36.5           = 17.27
+recency_pseudo = 14.75
+base_r010 = (3×21.3 + 14.75×17.27) / 17.75             = 17.95
+base_r008 (Tucker return deflation of -1.0)            = 16.95
+expected = 16.95 × (59.3/60) × 1.0 + 0 (ATL mid-tier)  = 16.75
+σ_eff = max(5.5, 16.95 × 0.60)                         = 10.17
+z = (16.5 - 16.75) / 10.17                             = -0.025
+p_over(16.5)                                            = 0.510
+```
+
+0.721 → 0.510. Within rounding of the market's 0.514 — appropriate
+hedging given the hot-stretch vs full-season tension.
+
+---
+
+## Week 9 — the current strategy
+
+**Version tag:** `W9-R002-R003b-R005b-R008-R010`. Rows logged from
+Week 9 forward (and Week 8 Sun+Mon after the 2026-11-01 mid-week
+ship) carry this in `methodology_version`. Weeks 3–7 and Week 8 TNF
+keep their original tags and are scored under their own methodology.
+
+**Composition order.** Five rules stack (R-001 and R-006 retired):
 
 ```
   R-003b (base elevation)  —>  slate.py adds inherited rec/car when a
                                 position teammate is effectively out
                                 (injury-report Out OR non-ACT roster)
-  R-006 (small-N blend)    —>  slate.py blends the R-003-elevated base
-                                toward season average when gms<3 in the
-                                trailing window; output = base_*_r006
-  R-008 (backup-return)    —>  slate.py deflates base_*_r006 when a
+  R-010 (empirical Bayes)  —>  slate.py shrinks the R-003-elevated
+                                trailing mean toward prior-season full-year
+                                with pseudo-count = Efron-Morris halflife
+                                (29.5 RB / 13.5 WR); output = base_*_r010
+  R-008 (backup-return)    —>  slate.py deflates base_*_r010 when a
                                 same-position teammate was out in some
                                 trailing-3 weeks but is active this week;
                                 output = base_*_r008, which is the
                                 FORMULA INPUT
   R-002 (matchup_adjust)   —>  additive bump from opp's position-specific
                                 EPA-allowed rank
-  formula                  —>  raw_expected = base_r008 × (pace/60) ×
-                                              usage_factor + matchup_adjust
-  R-005 (variable sigma)   —>  sigma_eff = max(SIGMA[market], base × 0.30)
-  R-001 (shrinkage)        —>  if |raw_expected − base_r008| > threshold:
-                                 expected = base_r008 + 0.5 × deviation
-                                else:  expected = raw_expected
+  formula                  —>  expected = base_r008 × (pace/60) ×
+                                           usage_factor + matchup_adjust
+  R-005' (variable sigma)  —>  sigma_eff = max(SIGMA[market],
+                                                base × SIGMA_SCALE[position])
 ```
 
-R-005 only affects the final z-score; the base and raw_expected and
-R-001 shrinkage all use the composed base. R-008 lands on top of
-R-006 (and no-ops when no teammate is returning from a trailing-window
-outage) because the deflation is the final correction to the formula
-input, bringing the "backup absent" trailing-base + R-006 blend into
-the "backup present" context the game will be played under.
+R-010 subsumes R-001's shrinkage role (continuous empirical-Bayes
+instead of threshold-gated halving). R-010 subsumes R-006's role
+(prior-season fallback instead of same-season no-op).
 
-**Sigma** — scales with base (R-005):
+**Sigma** — scales with base, per position (R-005'):
 ```
-sigma_eff = max(SIGMA[market], base × 0.30)
+SIGMA_SCALE = { RB: 0.60, WR: 0.65 }
+sigma_eff = max(SIGMA[market], base × SIGMA_SCALE[position])
 ```
-- Rushing: floor `sigma = 5.5`; scale binds above base ≈ 18.3.
-- Receptions: floor `sigma = 2.5`; scale binds above base ≈ 8.3.
+- Rushing: floor `sigma = 5.5`; scale binds for base > 9.17 car/g.
+- Receptions: floor `sigma = 2.5`; scale binds for base > 3.85 rec/g.
 
 **Mean formula:**
 ```
 expected = base_r008 × (pace / 60) × usage_factor + matchup_adjust_r002
-         (then R-001 shrinks if deviation exceeds threshold)
 ```
 
-- `base_r008` = `base_car_r008` for rushing props, `base_rec_r008`
-  for receiving. Equals `base_*_r006` when R-008 does not fire (which
-  equals `base_*_r003` when R-006 doesn't fire either, which equals
-  the raw trailing-3 base when R-003 doesn't fire either).
+- `base_r008` = `base_car_r008` for rushing, `base_rec_r008` for
+  receiving. On W9+ rows this equals `base_*_r010` after any R-008
+  deflation applies. On W8 rows the composition was R-003 → R-006
+  → R-008.
 - `pace` = team YTD plays/game ÷ 60.
 - `usage_factor` = 1.0 by default.
 - `matchup_adjust_r002` = R-002 output (see registry).
@@ -532,6 +657,25 @@ my_p = Φ(z)       for under
 ```
 
 **Clamp:** `my_p ∈ [0.02, 0.98]`.
+
+---
+
+## Week 8 — superseded strategy
+
+**Version tag:** `W8-R001-R002-R003b-R005-R006-R008`. Rows logged for
+Week 8 TNF (the four CAR @ GB props) carry this. Superseded mid-week
+on 2026-11-01 by W9's R-010 + R-005' additions after Bucky Irving's
+row surfaced live overconfidence. Rows logged for W8 Sun+Mon carry
+the W9 tag.
+
+Composition order was six rules (R-001 through R-008 as listed in the
+"Between W7 and W8" entry above). Formula input was `base_*_r008`
+built on top of R-006 blending. Sigma was `max(5.5/2.5, base × 0.30)`
+market-tied (not position-aware).
+
+See the "Between Week 8 and Week 9" entry above for the full
+rationale, Irving worked example, and backtest results that drove
+the mid-week ship.
 
 ---
 
@@ -632,7 +776,15 @@ dated, sourced (why we believe it), and applies from that week
 forward. **Never edit past weeks' logged predictions to reflect a
 new rule** — new rules apply to future logs only.
 
-### R-001 — shrinkage toward trailing-3-game base  (added 2026-10-03)
+### R-001 — shrinkage toward trailing-3-game base  (added 2026-10-03, **retired 2026-11-01**)
+
+**Retirement note (2026-11-01):** fired on only 2% of live rows (2 of
+92 rows through Week 8 TNF). Thresholds (3 car / 1.5 rec) were wide
+enough that the raw_expected almost never deviated from base enough
+to trip them, and R-010's continuous empirical-Bayes shrinkage
+subsumes the physical intent while actually firing in a useful
+fraction of cases. Dropped from the composition in the W9 ship to
+avoid double-shrinking the rare rows R-001 did fire on.
 
 ```
 condition:   |raw_expected − base| > 3   for rushing props
@@ -819,7 +971,15 @@ backtest:    2023 +0.0017, 2024 +0.0015, 2025 +0.0016 Brier delta vs
              codification policy on all three seasons.
 ```
 
-### R-006 — small-N blend of trailing-3 base toward season average  (added 2026-10-22, active Week 7)
+### R-006 — small-N blend of trailing-3 base toward season average  (added 2026-10-22, active Week 7, **retired 2026-11-01 as formula input**)
+
+**Retirement note (2026-11-01):** audit columns 63-66 still populated
+by slate.py for continuity, but R-006 no longer feeds the formula on
+W9+ rows. The silent-no-op failure mode on returning-from-injury
+players (Jacobs W8, both trailing and season means equal to the one
+returning-game observation) made it unreliable in exactly the thin-
+sample case it was designed for. Replaced by R-010's empirical-Bayes
+shrinkage with prior-season fallback.
 
 ```
 condition:   the player's trailing-3 usage window contains fewer than
@@ -942,6 +1102,116 @@ backtest:    2023 +0.0054, 2024 +0.0052, 2025 -0.0001 Brier delta vs
              anomalies, not a shippable rule change.
 ```
 
+### R-010 — empirical-Bayes shrinkage toward prior-season (added 2026-11-01, active Week 9; shipped mid-W8)
+
+```
+condition:   always runs on W9+ rows (replaces R-006 as the shrinkage
+             mechanism). The ebayes composition no-ops to the R-003-
+             elevated trailing mean only when:
+               - current-season n = 0 AND prior-season n < 5
+                 (fallback to positional league-mean prior)
+               - trailing_n = 0 AND there's no current-season sample
+                 (fallback to the shrunk season estimate)
+             Otherwise the base moves by at least a few percent and
+             r010_fires = True on the audit column.
+applies to:  both markets.
+effect:      shrink the current-season observation toward the player's
+             prior-season full-year average with a pseudo-count equal
+             to the Efron-Morris regression halflife, then blend with
+             the R-003-elevated trailing-3 using a recency pseudo-
+             count of halflife/2.
+
+             HALFLIFE_RB = 29.5 games    (Bleacher Report / Efron-Morris)
+             HALFLIFE_WR = 13.5 games
+             POSITIONAL_PRIOR_RB = 14 car/g  (fallback for rookies / new)
+             POSITIONAL_PRIOR_WR =  5 rec/g
+
+             prior      = prior_season_mean if prior_n >= 5
+                          else positional_prior
+             shrunk     = (season_n × season_mean + k × prior)
+                            / (season_n + k)
+             base_r010  = (trailing_n × trailing_mean
+                             + (k/2) × shrunk)
+                            / (trailing_n + k/2)   when trailing_n > 0
+             base_r010  = shrunk                   when trailing_n = 0
+
+reasoning:   R-006 shrank toward the current-season average, which is
+             a no-op when the player's current-season sample is thin
+             (the trailing and season means are the same observations).
+             The Jacobs W8 row surfaced this: 1 game played all season,
+             both trailing_mean and season_mean = 11, no shrinkage
+             possible. R-010's prior-season fallback actually anchors
+             to Jacobs's 2025 15.8 car/g, which is what the market
+             priced in and what the physical reality of a returning
+             starter supports.
+
+             The Efron-Morris halflife numbers are from empirical
+             sports-stats literature (Bleacher Report cited; practitioner
+             consensus): RBs regress ~halfway toward prior after ~29.5
+             games, WRs after ~13.5. Using these as pseudo-counts in a
+             conjugate-prior shrinkage gives the right qualitative
+             behavior at every n: thin samples pull hard toward prior,
+             dense samples barely move.
+
+             The halflife/2 recency pseudo-count is a practical choice
+             — the shrunk current-season estimate is itself a composite
+             of observation and prior, so it's worth about half the
+             raw prior's evidence weight. Backtest sweeps weren't done
+             on this specific constant; a future candidate could tune it.
+
+source:      research pass 2026-10-29 (PlayerProfiler Variance Manifesto,
+             Bleacher Report / Efron-Morris regression halflife). Backtest
+             2026-10-29 across 2023-2025 with full-season prior fallback.
+             Shipped mid-W8 on 2026-11-01 after Bucky Irving row surfaced
+             live overconfidence that the formula couldn't fix on its own.
+tooling:     slate.py applies R-010 to each queue entry after R-003
+             elevation. ebayes_base() and prior_full_season() live in
+             nflcal/data.py. The UI shows an "R-010 ebayes" chip in the
+             formula readout.
+backtest:    2023 +0.0112, 2024 +0.0051, 2025 +0.0039 Brier delta vs
+             the current W8 methodology (positive = improvement). Worst-
+             season +0.0039, mean +0.0067. Passes strict codification
+             policy on every season. Combined with R-005' (SIGMA bump)
+             as the W9 slice: 2023 +0.0129, 2024 +0.0064, 2025 +0.0106
+             — ≈3× the biggest previous ship.
+```
+
+### R-005' — upgraded sigma scaling (field-median per position)  (added 2026-11-01, active Week 9; shipped mid-W8)
+
+```
+condition:   always runs on W9+ rows (replaces R-005's single 0.30 constant).
+applies to:  both markets.
+effect:      SIGMA_SCALE = { RB: 0.60, WR: 0.65 }
+             sigma_eff = max(SIGMA[market], base × SIGMA_SCALE[position])
+
+             Floor binds for base < 9.17 car/g (RB) or 3.85 rec/g (WR).
+             For everything above those thresholds the scale is live.
+reasoning:   The W7 R-005 was tuned off a Nacua-class overconfidence
+             fix with σ_scale = 0.30. A sweep had hinted that higher
+             values kept improving Brier, but we read that as regression-
+             to-0.5 artifact. The 2026-10-29 sports-stats research pass
+             surfaced that the practitioner consensus is substantially
+             higher: PlayerProfiler's Variance Manifesto gives CV
+             benchmarks of ~0.5-0.6 for RB and ~0.6-0.7 for WR at the
+             fantasy-points level (volume props are slightly tamer but
+             not dramatically so). Our 0.30 was roughly half the field
+             standard, which translates directly to systematic
+             overconfidence on every high-base prop.
+             Chris chose field-median 0.60/0.65 over my conservative
+             0.50/0.55 draft on the principle that "occasionally wrong
+             is OK; systematically overconfident is not."
+source:      sports-stats research pass 2026-10-29 (PlayerProfiler
+             Variance Manifesto). Backtest same day; shipped 2026-11-01.
+tooling:     tools/calc.py's SIGMA_SCALE constant is now a dict keyed
+             by position; ui.html mirrors. compute_myp accepts an
+             explicit `position` kwarg; defaults to RB values when
+             omitted.
+backtest:    sigma_up isolate: 2023 +0.0114, 2024 +0.0059, 2025 +0.0102.
+             Worst-season +0.0059, mean +0.0091. Passes strict policy
+             on every season by a wide margin — this change alone
+             carries most of the W9 Brier gain.
+```
+
 ### Placeholder format for future rules:
 
 ```
@@ -998,3 +1268,13 @@ rows were notably miscalibrated and prompted the W8 methodology bump
 (see "Between Week 7 and Week 8" above). Those rows stay as they were
 logged — the record is honest about what the W7 methodology output,
 even when the inputs were stale.
+
+**Week 8:** W8 split across two methodology versions within a single
+calendar week due to the mid-W8 ship on 2026-11-01. TNF rows (4 CAR @
+GB props logged 2026-10-29) carry `methodology_version =
+W8-R001-R002-R003b-R005-R006-R008`. All other W8 rows (Sun 1 PM,
+Sun 4:25 PM, MNF — logged 2026-11-01 onward) carry
+`methodology_version = W9-R002-R003b-R005b-R008-R010`. The split is
+explicit on each row and the write-up will treat the two tags as
+separate calibration buckets. The Irving row (first Sunday pick,
+pre-ship) was the trigger; see "Between Week 8 and Week 9" above.

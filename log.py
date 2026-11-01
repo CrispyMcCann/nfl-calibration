@@ -67,12 +67,17 @@ FIELDS = [
     # season average; r006_notes names the inputs so an auditor can
     # retrace the arithmetic.
     "base_rec_r006", "base_car_r006", "r006_fires", "r006_notes",
-    # W8 R-008 audit. base_*_r008 is the post-R-003 post-R-006 post-R-008
-    # base — the formula input for W8+ rows (equals base_*_r006 when R-008
-    # doesn't fire). r008_fires marks whether a same-position teammate who
-    # was out in some of the trailing-3 weeks is active this week, so the
-    # trailing base has been deflated to reflect their return.
+    # W8 R-008 audit. base_*_r008 is the post-R-008 base — the formula
+    # input for W8+ rows. On W8 rows R-008 operated on base_*_r006; on
+    # W9+ rows R-008 operates on base_*_r010 (one step further).
     "base_rec_r008", "base_car_r008", "r008_fires", "r008_notes",
+    # W9 R-010 audit. base_*_r010 is the post-R-003 post-R-010 base —
+    # current-season observation shrunk toward prior-season full-year
+    # (or positional prior for rookies) with pseudo-count = Efron-Morris
+    # halflife, then blended with trailing-3 for recency weight. R-008
+    # operates on this on W9+ rows. R-006 is retired but columns 63-66
+    # are still populated for continuity.
+    "base_rec_r010", "base_car_r010", "r010_fires", "r010_notes",
 ]
 
 

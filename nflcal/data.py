@@ -460,12 +460,14 @@ def elevation_r003(season: int, week: int, team: str, position: str,
 
 def season_avg(season: int, player: str, through_week: int,
                 market: str) -> float | None:
-    """R-006 helper. Season-to-date mean of a player's stat across all
-    games they actually played through `through_week`. Returns None if
-    no games on record. 'market' is 'rushing' or 'receiving' (the two
-    the formula consumes); yards markets are not modelled here.
-    This is the stable prior that R-006 blends the thin trailing-3
-    base toward when the player missed games in the trailing window."""
+    """Season-to-date mean of a player's stat across all games they
+    actually played through `through_week`. Used by R-010 as the
+    current-season observation to shrink; previously used by the
+    retired R-006.
+
+    'market' is 'rushing' or 'receiving' (the two the formula consumes);
+    yards markets are not modelled here. Returns None if no games on
+    record this season."""
     ps = _player_stats(season)
     hit = ps[(ps.player_display_name == player) & (ps.week <= through_week)]
     if hit.empty:
@@ -474,16 +476,106 @@ def season_avg(season: int, player: str, through_week: int,
     return float(col.mean())
 
 
+def season_games(season: int, player: str, through_week: int) -> int:
+    """How many games the player actually played this season through
+    `through_week`. R-010 uses this as the current-season n."""
+    ps = _player_stats(season)
+    hit = ps[(ps.player_display_name == player) & (ps.week <= through_week)]
+    return int(len(hit))
+
+
 def blend_small_n(base: float, season_avg_: float | None, gms: int) -> float:
-    """R-006 blend. When `gms < 3` (player missed games in the trailing-3
-    window), weight-blend the thin trailing base against the season
-    average. Weight on trailing = gms/3, so gms=2 → 2/3 trailing + 1/3
-    season, gms=1 → 1/3 trailing + 2/3 season. gms≥3 is a no-op; a
-    missing season_avg_ (first-game players, rookies) also no-ops."""
+    """R-006 (retired W8-era) blend. Kept so legacy variants in
+    validate.py still resolve the symbol. R-010 subsumes this on live
+    predictions — the W9 slate pipeline uses `ebayes_base()` instead.
+
+    When `gms < 3` (player missed games in the trailing-3 window),
+    weight-blend the thin trailing base against the season average.
+    Weight on trailing = gms/3. gms≥3 or missing season_avg_ is a
+    no-op."""
     if gms >= 3 or season_avg_ is None:
         return float(base or 0)
     w = max(gms, 0) / 3.0
     return w * float(base or 0) + (1.0 - w) * float(season_avg_)
+
+
+# ----- R-010 (empirical-Bayes base) ---------------------------------------
+# Shipped W9 (2026-11-01) mid-week after live overconfidence evidence on
+# Bucky Irving: current-season observation shrunk toward prior-season
+# full-year average with pseudo-count = Efron-Morris regression halflife.
+# Trailing-3 is then blended for recency weight.
+
+R010_HALFLIFE_RB = 29.5    # Bleacher Report / Efron-Morris: RBs regress ~half after this many games
+R010_HALFLIFE_WR = 13.5    # ditto for WRs
+R010_POSITIONAL_PRIOR_RB = 14.0   # fallback for rookies / no-prior-year players (car/g)
+R010_POSITIONAL_PRIOR_WR =  5.0   # ditto (rec/g)
+
+
+@functools.lru_cache(maxsize=4)
+def _prior_season_player_stats(season: int) -> pd.DataFrame:
+    """Previous-season player_stats cache; one load per prior season."""
+    try:
+        return nfl.load_player_stats([season]).to_pandas()
+    except Exception:
+        return pd.DataFrame()
+
+
+def prior_full_season(season: int, player: str,
+                       market: str) -> tuple[float | None, int]:
+    """Prior-season (season-1) full-year mean rate and game count for a
+    player. Returns (None, 0) when the player has no prior-year data
+    (rookies, new-to-league). Chris chose full-season over last-5 for
+    stability on 2026-10-29 while drafting the W9 slice."""
+    ps = _prior_season_player_stats(season - 1)
+    if ps.empty:
+        return None, 0
+    hit = ps[ps.player_display_name == player]
+    if hit.empty:
+        return None, 0
+    col = hit.carries if market == "rushing" else hit.receptions
+    return float(col.mean()), int(len(hit))
+
+
+def ebayes_base(trailing_mean: float, trailing_n: int,
+                 season_mean: float | None, season_n: int,
+                 prior_mean: float | None, prior_n: int,
+                 position: str) -> float:
+    """R-010 empirical-Bayes base: shrink the current-season observation
+    toward the prior-season full-year average (or the positional
+    fallback for rookies), then blend trailing-3 for recency weight.
+
+    Shrinkage weight: pseudo-count = halflife[position]. At season_n ==
+    halflife the shrunk estimate is halfway between observation and
+    prior — this is the Efron-Morris calibration (RB ~29.5 games, WR
+    ~13.5 games).
+
+    Recency blend: trailing_mean gets trailing_n games of weight,
+    shrunk_season gets halflife/2 pseudo-games of weight. The shrunk
+    estimate is already a composite so it's worth about half the raw
+    prior's evidence weight.
+
+    Returns the composed base (same units as the input means)."""
+    k = R010_HALFLIFE_RB if position == "RB" else R010_HALFLIFE_WR
+    pos_prior = (R010_POSITIONAL_PRIOR_RB if position == "RB"
+                 else R010_POSITIONAL_PRIOR_WR)
+
+    # Prior: previous-season full-year when we have ≥5 games of it;
+    # otherwise fall back to the positional mean for the depth-rank-1
+    # tier (rookies and brand-new players).
+    prior = prior_mean if (prior_mean is not None and prior_n >= 5) else pos_prior
+
+    # Shrink current-season observation toward the prior.
+    if season_n > 0 and season_mean is not None:
+        shrunk_season = (season_n * float(season_mean) + k * prior) / (season_n + k)
+    else:
+        shrunk_season = prior
+
+    # Blend with trailing-3 for recency weight.
+    recency_pseudo = k / 2.0
+    if trailing_n > 0:
+        return (trailing_n * float(trailing_mean or 0)
+                + recency_pseudo * shrunk_season) / (trailing_n + recency_pseudo)
+    return shrunk_season
 
 
 # R-008 constants. Deflation cap matches the symmetric magnitude a would-be

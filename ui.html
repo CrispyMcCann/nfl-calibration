@@ -296,7 +296,7 @@ const nowISO = () => new Date().toISOString();
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
 
-/* === METHODOLOGY :: W8-R001-R002-R003b-R005-R006-R008 =================
+/* === METHODOLOGY :: W9-R002-R003b-R005b-R008-R010 =====================
  * SYNC CONTRACT. The weekly probability formula lives in three places
  * that must stay IDENTICAL:
  *   1. METHODOLOGY.md — authoritative statement of the formula
@@ -304,39 +304,38 @@ function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
  *   3. tools/calc.py — Python fallback
  *
  * When you change this block, change METHODOLOGY.md and tools/calc.py
- * in the SAME commit and BUMP METH_VER to a new tag. Rows logged under
- * the old tag stay tagged; new rows get the new tag. Diverging the
- * three silently invalidates the calibration curve.
+ * in the SAME commit and BUMP METH_VER to a new tag.
  *
- * Composition order for Week 8:
- *   1. R-003 base elevation       (slate.py; teammate OUT this week pushes base up)
- *   2. R-006 small-N blend        (slate.py; thin-sample base blended toward season avg)
+ * Composition order for Week 9:
+ *   1. R-003b base elevation      (slate.py; teammate OUT this week pushes base up)
+ *   2. R-010 empirical Bayes      (slate.py; shrink current-season observation
+ *                                  toward prior-season full-year with pseudo-count =
+ *                                  Efron-Morris halflife, then blend trailing-3
+ *                                  for recency — replaces R-006)
  *   3. R-008 backup-return defl.  (slate.py; teammate returning from trailing-3 outage
  *                                  pulls base back down — mirror of R-003)
  *   4. formula raw_expected       = base × (pace/60) × usage_factor + matchup_adjust_r002
- *   5. R-005 variable sigma       (sigma_eff = max(SIGMA, base × SIGMA_SCALE))
- *   6. R-001 shrinkage            (halves |raw − base| when it exceeds threshold)
+ *   5. R-005' position-specific σ (sigma_eff = max(SIGMA, base × SIGMA_SCALE[position]))
+ *   (R-001 threshold shrinkage retired W9 — ebayes in R-010 does the shrinkage)
  *
  * `base` for the formula is base_*_r008 (the queue stub's post-R-003
- * post-R-006 post-R-008 value). Legacy queue stubs without r008 fall
+ * post-R-010 post-R-008 value). Legacy queue stubs without r008 fall
  * through to r006 (W7) → r003 (W6) → raw.
  *
  * The erf is Abramowitz & Stegun 7.1.26, chosen to match math.erf used
  * by tools/calc.py. estimateProb mirrors tools/calc.py.one_prop exactly.
  * ======================================================================= */
-const METH_VER = "W8-R001-R002-R003b-R005-R006-R008";
+const METH_VER = "W9-R002-R003b-R005b-R008-R010";
 const SIGMA = { rushing: 5.5, receiving: 2.5 };
-const SHRINK_THRESHOLD = { rushing: 3.0, receiving: 1.5 };
-const SHRINK_FACTOR = 0.5;
 // R-002 constants. Position-specific EPA-allowed rank: 1=best D, 32=worst.
 const MATCHUP_BUMP = { rushing: 1.0, receiving: 0.5 };
 const MATCHUP_WORST_K = 8;
 const MATCHUP_BEST_K = 8;
-// R-005: variable-sigma scaling. sigma_eff = max(SIGMA[market], base × k).
-// Floor binds for low-base props; scaling widens the distribution on
-// high-base props so the formula is less confident when the base is
-// extreme. Value from empirical variance/base ratio for WR/RB stats.
-const SIGMA_SCALE = 0.30;
+// R-005' (W9) position-specific variance scaling. Field-median CV
+// values from PlayerProfiler's Variance Manifesto (RB CV ~0.5-0.6, WR
+// CV ~0.6-0.7). Replaces the single 0.30 constant that was ~half the
+// field standard. sigma_eff = max(SIGMA[market], base × SIGMA_SCALE[pos]).
+const SIGMA_SCALE = { RB: 0.60, WR: 0.65 };
 
 function erf(x) {
   const sign = x < 0 ? -1 : 1;
@@ -370,28 +369,30 @@ function matchupAdjustR002(market, passRankOpp, rushRankOpp) {
 
 /**
  * Compute formula_p and intermediates for one prop.
- * Inputs: base (R-003-elevated), pace, usageFactor, passRankOpp, rushRankOpp,
- *   matchupOverride (optional; if finite, replaces R-002's output), line
- *   (numbers); market, side (strings).
- * Returns { formulaP, expected, rawExpected, deviation, r001Fired,
- *   r002Fired, matchupAdjust, sigma } or null if inputs incomplete.
+ * Inputs: base (R-003→R-010→R-008 composed), pace, usageFactor,
+ *   passRankOpp, rushRankOpp, matchupOverride (optional; if finite,
+ *   replaces R-002's output), line, position ("RB" or "WR" for
+ *   R-005' per-position sigma; defaults to RB).
+ * Returns { formulaP, expected, rawExpected, deviation, r002Fired,
+ *   r005Scaled, matchupAdjust, sigma } or null if inputs incomplete.
  */
 function estimateProb({ market, side, base, pace, usageFactor,
-                        passRankOpp, rushRankOpp, matchupOverride, line }) {
+                        passRankOpp, rushRankOpp, matchupOverride, line,
+                        position }) {
   if (!Number.isFinite(base) || !Number.isFinite(pace) || !Number.isFinite(line)) return null;
   const uf = Number.isFinite(usageFactor) ? usageFactor : 1.0;
   const r002 = matchupAdjustR002(market, passRankOpp, rushRankOpp);
   const ma = Number.isFinite(matchupOverride) ? matchupOverride : r002;
   const mk = marketKey(market);
   const sigmaFloor = SIGMA[mk];
-  // R-005: variable sigma scales with base. Floor binds for low-base
-  // props; scale binds for high-base ones. Codified for W7.
-  const sigma = Math.max(sigmaFloor, base * SIGMA_SCALE);
-  const threshold = SHRINK_THRESHOLD[mk];
+  // R-005' (W9) position-specific sigma scaling. Default to RB values
+  // if position missing (slightly tighter is OK; the floor keeps us honest).
+  const scale = SIGMA_SCALE[position === "WR" ? "WR" : "RB"];
+  const sigma = Math.max(sigmaFloor, base * scale);
   const raw = base * (pace / 60) * uf + ma;
   const dev = raw - base;
-  const fired = Math.abs(dev) > threshold;
-  const expected = fired ? base + SHRINK_FACTOR * dev : raw;
+  // R-001 retired W9 — raw IS expected now.
+  const expected = raw;
   const z = (line - expected) / sigma;
   const pOver = 1 - phi(z);
   let myP = side === "over" ? pOver : 1 - pOver;
@@ -401,7 +402,6 @@ function estimateProb({ market, side, base, pace, usageFactor,
     expected: Number(expected.toFixed(3)),
     rawExpected: Number(raw.toFixed(3)),
     deviation: Number(dev.toFixed(3)),
-    r001Fired: fired,
     r002Fired: ma !== 0,
     r005Scaled: sigma > sigmaFloor + 1e-9,
     matchupAdjust: Number(ma.toFixed(3)),
@@ -631,7 +631,9 @@ $("save").addEventListener("click", async () => {
       ? estimateProb({ market: prev.market, side: prev.side || prev.expect,
                        base, pace, usageFactor: 1.0, line: v.line,
                        passRankOpp: parseFloat(prev.pass_def_rank_opp),
-                       rushRankOpp: parseFloat(prev.rush_def_rank_opp) })
+                       rushRankOpp: parseFloat(prev.rush_def_rank_opp),
+                       position: prev.position
+                                 || (prev.market === "rush_attempts" ? "RB" : "WR") })
       : null;
     const amendPatch = {
       ...prev, id: EDIT, amendments: hist,
@@ -663,7 +665,9 @@ $("save").addEventListener("click", async () => {
       ? estimateProb({ market: v.market, side: v.side,
                        base, pace: v.pace, usageFactor: 1.0, line: v.line,
                        passRankOpp: v.pass_def_rank_opp,
-                       rushRankOpp: v.rush_def_rank_opp })
+                       rushRankOpp: v.rush_def_rank_opp,
+                       position: v.position
+                                 || (v.market === "rush_attempts" ? "RB" : "WR") })
       : null;
     await DB.doc("predictions/" + id).set({
       ...v, id, logged_at: nowISO(), outcome: "", amendments: [], skip_reason: "",
@@ -893,9 +897,13 @@ const CSV_COLS = [
   "base_rec_r006","base_car_r006","r006_fires","r006_notes",
   // Added W8 R-008 audit (backup-return deflation: pulls base down when a
   // same-position teammate was out in some trailing-3 weeks but is active
-  // this week). base_*_r008 is the FORMULA INPUT for W8+ rows; equals
-  // base_*_r006 when R-008 doesn't fire.
+  // this week). base_*_r008 is the FORMULA INPUT for W8+ rows.
   "base_rec_r008","base_car_r008","r008_fires","r008_notes",
+  // Added W9 R-010 audit (empirical-Bayes shrinkage toward prior-season
+  // full-year with pseudo-count = Efron-Morris halflife; replaces R-006).
+  // base_*_r010 is the post-R-003 post-R-010 base; R-008 then operates
+  // on it to produce the formula input.
+  "base_rec_r010","base_car_r010","r010_fires","r010_notes",
 ];
 
 $("copycsv").addEventListener("click", async () => {
@@ -1037,7 +1045,7 @@ function recomputeFormula() {
   const q = left[QI];
   const line = parseFloat($("qline").value);
   if (!Number.isFinite(line)) return;
-  // W8 composition: slate.py applies R-003 → R-006 → R-008. The queue
+  // W9 composition: slate.py applies R-003 → R-010 → R-008. The queue
   // stub emits base_*_r008 as the post-composition base the formula
   // consumes. Legacy slates without the newer fields fall through to
   // base_*_r006 (W7) → base_*_r003 (W6) → raw base_* (pre-W6).
@@ -1048,10 +1056,12 @@ function recomputeFormula() {
   const base = Number.isFinite(baseR008) ? baseR008
               : Number.isFinite(baseR006) ? baseR006
               : Number.isFinite(baseR003) ? baseR003 : baseRaw;
+  // R-005' position-specific sigma scaling needs the position label.
+  const position = q.position || (q.market === "rush_attempts" ? "RB" : "WR");
   const override = parseFloat($("qexpected").value);
   // If user supplied a mean override, treat it as raw_expected. Otherwise
   // compute from the queue's base × pace (with R-002 picked up from the
-  // opp's position-specific defense rank). Either way R-001 may fire.
+  // opp's position-specific defense rank).
   let r;
   if (Number.isFinite(override)) {
     // Inject the override by passing it via matchupOverride so the
@@ -1061,12 +1071,14 @@ function recomputeFormula() {
       market: q.market, side: q.expect, base, pace: q.pace,
       usageFactor: 1.0, matchupOverride: override - expectedBase, line,
       passRankOpp: q.pass_def_rank_opp, rushRankOpp: q.rush_def_rank_opp,
+      position,
     });
   } else {
     r = estimateProb({
       market: q.market, side: q.expect, base, pace: q.pace,
       usageFactor: 1.0, line,
       passRankOpp: q.pass_def_rank_opp, rushRankOpp: q.rush_def_rank_opp,
+      position,
     });
   }
   if (!r) return;
@@ -1091,31 +1103,28 @@ function recomputeFormula() {
   const diverged = Number.isFinite(typedP) &&
     Math.abs(typedP - r.formulaP) > 0.001;
 
-  const fired = r.r001Fired
-    ? `<span style="color:var(--warn)">R-001 fired · shrunk ${r.rawExpected} → ${r.expected}</span>`
-    : `<span>R-001 skipped (|dev|=${Math.abs(r.deviation).toFixed(2)})</span>`;
-  // R-003, R-006, R-008 all fire in the slate; the UI reports them from
-  // the queue stub flags. R-003 shows raw → elevated; R-006 shows elevated →
-  // blended; R-008 shows blended → deflated, so the composition is visible.
+  // R-001 retired on W9 — no shrinkage chip to show.
+  // R-003, R-010 (replaces R-006), R-008 all fire in the slate; the UI
+  // reports them from the queue stub flags. R-003 shows raw → elevated;
+  // R-010 shows elevated → ebayes-shrunk; R-008 shows shrunk → deflated.
   const rawBase  = (q.market === "rush_attempts" ? q.base_car       : q.base_rec);
   const r003Base = (q.market === "rush_attempts" ? q.base_car_r003  : q.base_rec_r003);
-  const r006Base = (q.market === "rush_attempts" ? q.base_car_r006  : q.base_rec_r006);
+  const r010Base = (q.market === "rush_attempts" ? q.base_car_r010  : q.base_rec_r010);
   const r003 = q.r003_fires
     ? `<span style="color:var(--warn)">R-003 fired · base ${Number(rawBase).toFixed(2)} → ${Number(r003Base).toFixed(2)}</span>`
     : "";
-  const r006 = q.r006_fires
-    ? `<span style="color:var(--warn)">R-006 fired · base ${Number(r003Base).toFixed(2)} → ${Number(r006Base).toFixed(2)}</span>`
+  const r010 = q.r010_fires
+    ? `<span style="color:var(--warn)">R-010 ebayes · base ${Number(r003Base).toFixed(2)} → ${Number(r010Base).toFixed(2)}</span>`
     : "";
   const r008 = q.r008_fires
-    ? `<span style="color:var(--warn)">R-008 fired · base ${Number(r006Base).toFixed(2)} → ${Number(base).toFixed(2)}</span>`
+    ? `<span style="color:var(--warn)">R-008 fired · base ${Number(r010Base || r003Base).toFixed(2)} → ${Number(base).toFixed(2)}</span>`
     : "";
   const r002 = r.r002Fired
     ? `<span style="color:var(--warn)">R-002 fired · matchup ${r.matchupAdjust>=0?"+":""}${r.matchupAdjust}</span>`
     : "";
-  // R-005 fires when base × SIGMA_SCALE exceeds the market floor —
-  // i.e., the sigma shown is wider than the pre-W7 constant.
+  // R-005' fires when base × SIGMA_SCALE[position] exceeds the market floor.
   const r005 = r.r005Scaled
-    ? `<span style="color:var(--warn)">R-005 scaled · σ ${SIGMA[marketKey(q.market)]} → ${r.sigma}</span>`
+    ? `<span style="color:var(--warn)">R-005' scaled · σ ${SIGMA[marketKey(q.market)]} → ${r.sigma}</span>`
     : "";
   const overrideFlag = Number.isFinite(override)
     ? `<span style="color:var(--warn)">mean override</span>` : "";
@@ -1127,7 +1136,7 @@ function recomputeFormula() {
     `<span>expected <b class="big">${r.expected}</b></span>` +
     `<span>σ <b class="big">${r.sigma}</b></span>` +
     `<span>formula my_p <b class="big">${r.formulaP.toFixed(4)}</b></span>` +
-    r003 + r006 + r008 + r002 + r005 + fired + overrideFlag + divergedFlag +
+    r003 + r010 + r008 + r002 + r005 + overrideFlag + divergedFlag +
     `<span style="color:var(--ink-faint)">(${METH_VER})</span>`;
 }
 
@@ -1196,6 +1205,8 @@ $("qskip").addEventListener("click", async () => {
     r006_fires: q.r006_fires, r006_notes: q.r006_notes,
     base_rec_r008: q.base_rec_r008, base_car_r008: q.base_car_r008,
     r008_fires: q.r008_fires, r008_notes: q.r008_notes,
+    base_rec_r010: q.base_rec_r010, base_car_r010: q.base_car_r010,
+    r010_fires: q.r010_fires, r010_notes: q.r010_notes,
     skip_reason: reason,
     outcome: "skip", amendments: [],
   });
@@ -1265,6 +1276,8 @@ $("qlog").addEventListener("click", async () => {
     r006_fires: q.r006_fires, r006_notes: q.r006_notes,
     base_rec_r008: q.base_rec_r008, base_car_r008: q.base_car_r008,
     r008_fires: q.r008_fires, r008_notes: q.r008_notes,
+    base_rec_r010: q.base_rec_r010, base_car_r010: q.base_car_r010,
+    r010_fires: q.r010_fires, r010_notes: q.r010_notes,
     roof: q.roof, why: whyFinal,
     outcome: "", amendments: [], skip_reason: "",
     formula_p: formulaP, formula_expected: formulaExpected,
