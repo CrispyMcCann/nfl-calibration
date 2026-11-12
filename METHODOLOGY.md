@@ -660,6 +660,124 @@ my_p = Φ(z)       for under
 
 ---
 
+## Between Week 9 and Week 10 — share-model rebuild investigated, **not shipped**
+
+After Week 9 resolved, a post-mortem on the 46 W9-methodology rows
+showed an aggregate Brier delta vs market of −0.0168 — the first
+methodology to beat the market on the live record. Splitting by
+game-week revealed the sign had been driven by one lucky set of lines
+rather than a stable improvement:
+
+| game week | n | brier_you | brier_mkt | Δ |
+|---|---|---|---|---|
+| W8 Sun+MNF (logged mid-W9 under W9 methodology) | 22 | 0.3022 | 0.2564 | +0.0458 (worse) |
+| W9 (clean W9 methodology week) | 24 | 0.1746 | 0.2488 | −0.0742 (better) |
+
+Inspection of the biggest misses isolated a specific failure mode:
+R-010 shrinks a high-usage current RB toward their lower prior-season
+average, and this breaks when the underlying role changed
+structurally. Two live examples:
+
+- **D'Andre Swift** (under 16.5 car, my_p = 0.957, actual 27).
+  Trailing 15.7 → R-010 ebayes toward his 2025 DET committee share →
+  R-008 committee deflation → base ≈ 9. Swift is now the featured
+  back in CHI; the 2025 Detroit role is irrelevant to his 2026
+  usage.
+- **Tyler Allgeier** (under 15.5 car, my_p = 0.811, actual 17).
+  Trailing 17.3 → ebayes 10.0 (dragged toward 2025 ATL backup share)
+  → R-003 +5 car → base ≈ 15. Allgeier is now the lead ARI back
+  with Knight/Love/Benson/Conner out.
+
+The research memo filed 2026-11-01 (`project_w10_share_model` in the
+memory store) had already proposed the structural fix:
+**shrink the share, not the raw rate.** A share-model projection
+(`team_vol × shrunk_share × opp_mult`) estimates volume and role
+separately, so when a scheme changes the share stays stable through
+the transition.
+
+A W10 share-model rebuild was drafted, implemented behind a flag,
+and backtested across 2023 + 2024 + 2025. The strict ship policy
+required (a) worst-season Brier Δ ≥ −0.0001 vs W9 on all three
+seasons AND (b) mean Δ ≥ +0.003. **Every variant failed both
+gates.**
+
+### Backtest: 2023 + 2024 + 2025 share-model variants
+
+Line proxy is the median-rounded half-point (as in every prior
+backtest here — deltas on the same proxy are comparable; absolute
+Brier is not comparable to the live record).
+
+```
+Table 7 — W10 SHARE MODEL vs W9. Positive = share variant improves.
+variant         2023      2024      2025      worst     mean     verdict
+share_model   -0.0058   -0.0158   -0.0011   -0.0158   -0.0076    DROP
+share_ebayes  -0.0021   -0.0086   -0.0016   -0.0086   -0.0041    DROP
+share_full    -0.0011   -0.0042   -0.0054   -0.0054   -0.0036    DROP
+share_k5      +0.0019   -0.0024   -0.0014   -0.0024   -0.0006    DROP
+share_k15     -0.0049   -0.0072   -0.0088   -0.0088   -0.0070    DROP
+share_k20     -0.0083   -0.0101   -0.0113   -0.0113   -0.0099    DROP
+share_opp003  -0.0013   -0.0042   -0.0054   -0.0054   -0.0036    DROP
+share_opp008  -0.0008   -0.0042   -0.0054   -0.0054   -0.0035    DROP
+```
+
+Variants:
+- `share_model`: `team_vol × trailing_share × opp_mult`, no shrinkage,
+  no roster adjustments.
+- `share_ebayes`: adds ebayes shrinkage on share (pseudo-count
+  `k_share = 10`, blend evidence = season-to-date share, recency =
+  trailing-3).
+- `share_full`: adds the OUT-teammate share-inheritance and
+  RETURNING-teammate share-reclamation (replacing R-003 and R-008).
+- `share_k{5,15,20}`: `k_share` sweep around the default `10`.
+- `share_opp00{3,8}`: `opp_mult` magnitude sweep around the default
+  `0.05`.
+
+`share_k5` is the best-performing variant (mean −0.0006, worst
+−0.0024) and would be a near-coin-flip on aggregate — but it still
+fails both gates, and the worst-season gate (2024: −0.0024) is
+well outside the strict policy bound of ≥ −0.0001.
+
+### What this means — and why W9 stays frozen
+
+The share model fixes the specific overconfidence cases it was
+designed to fix (W10-era live sanity: Swift's projection goes from
+9 → 18.9, Allgeier's from ~15 → 21.3, both correctly reducing the
+my_p that got burned in W9). But it degrades calibration everywhere
+else — the Brier cost on the broader prop universe outweighs the
+Brier benefit on the specific failure cases.
+
+Two plausible structural reasons:
+
+1. **Prior-season share is noisier than prior-season rate.** A
+   rate ebayes draws a player's current rate toward their multi-game
+   prior-year rate, which is a stable signal. A share ebayes draws
+   it toward their prior-year *share of a particular team's offense*,
+   which changes with coordinator, scheme, teammates — the exact
+   factors the share model was supposed to normalize out. It's
+   possible share stability only pays off when the share estimation
+   has lower noise, which this prior construction doesn't deliver.
+
+2. **W9 is already strong.** The W9 methodology's backtest profile
+   was `mean +0.0099, worst +0.0064 vs W8` — an unusually clean
+   result. A rebuild had to clear a high bar, not just a neutral
+   bar.
+
+Per the backtest-first ship policy, W10 methodology stays frozen on
+`W9-R002-R003b-R005b-R008-R010`. Week 10 TNF (CIN @ BAL, Thu
+2026-11-13) and all subsequent regular-season rows log under W9.
+The share-model code (`share_projection` in `nflcal/data.py` plus
+the backtest variants in `validate.py`) stays in the repo — it's
+honest to keep the dead-end investigation visible — but no sync-
+contract file (`METHODOLOGY.md` section above, `ui.html`,
+`tools/calc.py`) gets a methodology version bump. `METH_VER` stays
+`W9-R002-R003b-R005b-R008-R010`.
+
+The rebuild gets re-examined post-season as part of the research
+pass, when the full prospective record is available to train
+against and the cost of methodology churn is zero.
+
+---
+
 ## Week 8 — superseded strategy
 
 **Version tag:** `W8-R001-R002-R003b-R005-R006-R008`. Rows logged for
@@ -1210,6 +1328,34 @@ backtest:    sigma_up isolate: 2023 +0.0114, 2024 +0.0059, 2025 +0.0102.
              Worst-season +0.0059, mean +0.0091. Passes strict policy
              on every season by a wide margin — this change alone
              carries most of the W9 Brier gain.
+```
+
+### W10-SHARE — share-model rebuild (investigated 2026-11-12, **not shipped**)
+
+Not a rule in the registry sense — it was an architectural rebuild
+(volume = team_vol × shrunk_share × opp_mult) proposed to replace
+R-003 / R-008 / R-010 with one share-based mechanism. Failed strict
+backtest policy on all three seasons; W9 stays the active methodology.
+
+```
+status:      investigated and rejected 2026-11-12
+proposal:    team_vol × shrunk_share × opp_mult, shrinking the
+             SHARE (bounded, stable across scheme changes) rather
+             than the raw rate
+motivation:  W9's R-010 drags high-usage current RBs toward their
+             lower prior-season rate when the role structurally
+             changed (Swift to CHI, Allgeier to lead ARI back).
+             Share model targets those cases directly.
+backtest:    worst-season share_full −0.0054 (2025), mean −0.0036.
+             Best variant share_k5 at mean −0.0006, worst −0.0024
+             — still fails the gate. Every k_share and opp_mult
+             sweep variant negative on all 3 seasons.
+decision:    freeze W9 for the rest of 2026; defer share-model
+             work to the post-season research pass. Code stays in
+             repo (share_projection in nflcal/data.py, variants in
+             validate.py) as an honest record of the dead end.
+see:         "Between Week 9 and Week 10" entry above for the full
+             numbers and the structural-why.
 ```
 
 ### Placeholder format for future rules:
