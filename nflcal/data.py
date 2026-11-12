@@ -709,6 +709,490 @@ def deflation_r008(season: int, week: int, team: str, position: str,
     }
 
 
+# ----- W10 share model ----------------------------------------------------
+# Two-step projection: team_vol × shrunk_share × opp_mult.
+#
+# Shipped W10 (2026-11-12) as a rebuild of the stacked-rule base, after
+# live W9 evidence that R-010 was dragging high-usage current RBs toward
+# their lower prior-season averages on scheme changes (Swift featured in
+# CHI, Allgeier lead-back without Robinson). Share is bounded [0, 1] and
+# stable across team/scheme changes; raw rate is not.
+
+K_SHARE = 10         # share-ebayes pseudo-count (games). Sweep range 5..20.
+OPP_MULT_MAGNITUDE = 0.05  # top-vs-bottom defense = ±5% on volume
+OPP_MULT_CLIP = (0.95, 1.05)
+
+# Positional-tier median share for rookies / new-to-league fallback.
+# Derived from nflverse 2023-2025 depth-rank-1 players, rounded to 2dp.
+# (RB1 is the clear lead back; RB2 is the committee backup; WR1/WR2 similar.)
+POS_TIER_SHARE_FALLBACK = {
+    ("RB", 1): 0.55, ("RB", 2): 0.25, ("RB", 3): 0.10,
+    ("WR", 1): 0.26, ("WR", 2): 0.18, ("WR", 3): 0.12,
+}
+POS_TIER_SHARE_DEFAULT = {"RB": 0.25, "WR": 0.15}
+
+# Min teammate trailing snap_pct to count as an "OUT candidate" for share
+# inheritance. Scrub-level backups don't carry transferable share.
+SHARE_OUT_SNAP_FLOOR = 0.25
+
+
+def _team_pos_weekly_vol(season: int, team: str, position: str,
+                         through_week: int) -> pd.Series:
+    """Per-week sum of the position group's volume on `team`, up to and
+    including `through_week`. Index is week, values are the per-week team
+    total (carries for RB, receptions for WR+TE)."""
+    ps = _player_stats(season)
+    if ps.empty:
+        return pd.Series(dtype=float)
+    hit = ps[(ps.team == team) & (ps.week <= through_week)]
+    if position == "RB":
+        hit = hit[hit.position == "RB"]
+        col = "carries"
+    else:  # WR volume = WR + TE receptions (Step 1 of the plan)
+        hit = hit[hit.position.isin(["WR", "TE"])]
+        col = "receptions"
+    if hit.empty:
+        return pd.Series(dtype=float)
+    return hit.groupby("week")[col].sum()
+
+
+def _team_pos_window_total(season: int, team: str, position: str,
+                            week_start_exclusive: int,
+                            week_end_inclusive: int) -> tuple[float, int]:
+    """(total team volume, weeks_with_games) in the half-open interval
+    (week_start_exclusive, week_end_inclusive]."""
+    s = _team_pos_weekly_vol(season, team, position, week_end_inclusive)
+    if s.empty:
+        return 0.0, 0
+    s = s[s.index > week_start_exclusive]
+    if s.empty:
+        return 0.0, 0
+    return float(s.sum()), int(len(s))
+
+
+def _player_window_total(season: int, team: str, player: str,
+                         position: str,
+                         week_start_exclusive: int,
+                         week_end_inclusive: int) -> tuple[float, int]:
+    """(player's total volume, player_games_played) in the same half-open
+    interval (week_start_exclusive, week_end_inclusive]."""
+    ps = _player_stats(season)
+    if ps.empty:
+        return 0.0, 0
+    hit = ps[(ps.team == team) & (ps.player_display_name == player)
+             & (ps.week <= week_end_inclusive)
+             & (ps.week > week_start_exclusive)]
+    if hit.empty:
+        return 0.0, 0
+    col = hit.carries if position == "RB" else hit.receptions
+    return float(col.sum()), int(len(hit))
+
+
+def team_volume(season: int, through_week: int, team: str, position: str,
+                last_n: int = 3) -> float | None:
+    """Trailing-n mean of the team's position-group weekly volume.
+
+    team_vol[RB] = mean per-game of (sum of RB carries on the team)
+    team_vol[WR] = mean per-game of (sum of WR+TE receptions on the team)
+
+    Returns None if the team has no games on record in the trailing window.
+    """
+    total, n_weeks = _team_pos_window_total(
+        season, team, position,
+        week_start_exclusive=max(0, through_week - last_n),
+        week_end_inclusive=through_week)
+    if n_weeks == 0:
+        return None
+    return total / n_weeks
+
+
+def _player_trailing_rate(season: int, through_week: int, team: str,
+                          player: str, position: str,
+                          last_n: int = 3) -> tuple[float, int]:
+    """(trailing_mean, trailing_n_games_played) for one player on `team`.
+
+    Counts only games the player actually played in the trailing-n window.
+    `position` is WR or RB — same market convention as usage()."""
+    ps = _player_stats(season)
+    if ps.empty:
+        return 0.0, 0
+    hit = ps[(ps.team == team) & (ps.player_display_name == player)
+             & (ps.week <= through_week)
+             & (ps.week > max(0, through_week - last_n))]
+    if hit.empty:
+        return 0.0, 0
+    col = hit.carries if position == "RB" else hit.receptions
+    return float(col.mean()), int(len(hit))
+
+
+def _player_trailing_total(season: int, through_week: int, team: str,
+                           player: str, position: str,
+                           last_n: int = 3) -> float:
+    """Sum of player's volume over the trailing-n window. Used to compute
+    share of team's trailing-window total (so a part-time contributor
+    doesn't get credited with their per-game rate as share)."""
+    ps = _player_stats(season)
+    if ps.empty:
+        return 0.0
+    hit = ps[(ps.team == team) & (ps.player_display_name == player)
+             & (ps.week <= through_week)
+             & (ps.week > max(0, through_week - last_n))]
+    if hit.empty:
+        return 0.0
+    col = hit.carries if position == "RB" else hit.receptions
+    return float(col.sum())
+
+
+def player_share(season: int, through_week: int, team: str, player: str,
+                 position: str, last_n: int = 3) -> tuple[float | None, int]:
+    """Trailing-n share: player's total / team's total over the same
+    window (so a player who sat half the window doesn't carry the per-
+    game rate of a full-time contributor).
+
+    Returns (share, player_games_played). share is None if the team has
+    no games in the window."""
+    ws = max(0, through_week - last_n)
+    team_total, team_weeks = _team_pos_window_total(
+        season, team, position, ws, through_week)
+    pl_total, pl_games = _player_window_total(
+        season, team, player, position, ws, through_week)
+    if team_total <= 0 or team_weeks == 0:
+        return None, pl_games
+    return pl_total / team_total, pl_games
+
+
+def _prior_season_team(season: int, player: str) -> str | None:
+    """Which team the player was on in the prior season. Uses their
+    most-played team that year if they switched mid-season. None if the
+    player has no prior-season data."""
+    ps = _prior_season_player_stats(season - 1)
+    if ps.empty:
+        return None
+    hit = ps[ps.player_display_name == player]
+    if hit.empty:
+        return None
+    team_counts = hit.groupby("team").size()
+    if team_counts.empty:
+        return None
+    return str(team_counts.idxmax())
+
+
+def prior_season_share(season: int, player: str,
+                       position: str) -> tuple[float | None, int]:
+    """Prior-season share: player's total prior-year volume / their
+    prior team's total position-group volume over the SAME games the
+    player played (so a half-season injury doesn't sandbag the share).
+
+    Returns (share, n_games_prior). (None, 0) when the player has no
+    prior-season data."""
+    ps = _prior_season_player_stats(season - 1)
+    if ps.empty:
+        return None, 0
+    hit = ps[ps.player_display_name == player]
+    if hit.empty:
+        return None, 0
+    prior_team = _prior_season_team(season, player)
+    if prior_team is None:
+        return None, int(len(hit))
+    # Only count games the player and team BOTH played. In practice
+    # that's every week the player appears on the team; pool those weeks.
+    hit_team = hit[hit.team == prior_team]
+    if hit_team.empty:
+        return None, int(len(hit))
+    weeks_played = sorted(set(int(w) for w in hit_team.week.unique()))
+    if not weeks_played:
+        return None, int(len(hit))
+    col = hit_team.carries if position == "RB" else hit_team.receptions
+    player_total = float(col.sum())
+    player_n = int(len(weeks_played))
+
+    weekly_team = _team_pos_weekly_vol(season - 1, prior_team, position,
+                                        through_week=99)
+    if weekly_team.empty:
+        return None, player_n
+    team_sum = float(weekly_team.loc[weekly_team.index.isin(weeks_played)].sum())
+    if team_sum <= 0:
+        return None, player_n
+    return player_total / team_sum, player_n
+
+
+def _trailing_snap_pct(season: int, through_week: int, team: str,
+                       player: str, last_n: int = 3) -> float:
+    """Trailing-n mean offensive snap pct for `player` on `team`. 0 when
+    no snap rows exist in the window."""
+    sn = _snaps(season)
+    if sn.empty:
+        return 0.0
+    hit = sn[(sn.team == team) & (sn.player == player)
+             & (sn.week <= through_week)
+             & (sn.week > max(0, through_week - last_n))]
+    if hit.empty:
+        return 0.0
+    return float(hit.offense_pct.mean() or 0.0)
+
+
+def _active_same_pos(season: int, week: int, team: str, position: str,
+                     exclude_player: str) -> list[str]:
+    """Active (status=ACT) same-position teammates for `week` on `team`,
+    excluding the queued player."""
+    try:
+        rw = _rosters_weekly(season)
+        hit = rw[(rw.week == week) & (rw.team == team)
+                 & (rw.position == position) & (rw.status == "ACT")]
+        return sorted(set(hit.full_name.dropna().astype(str))
+                      - {exclude_player})
+    except Exception:
+        return []
+
+
+def _share_fallback(position: str, depth_team: int | None) -> float:
+    """Positional-tier share when prior-season data is missing (rookie
+    / new-to-league). Falls back to the position default when depth rank
+    is unknown or outside the tiered range."""
+    if depth_team is None:
+        return POS_TIER_SHARE_DEFAULT.get(position, 0.20)
+    key = (position, int(depth_team))
+    if key in POS_TIER_SHARE_FALLBACK:
+        return POS_TIER_SHARE_FALLBACK[key]
+    return POS_TIER_SHARE_DEFAULT.get(position, 0.20)
+
+
+def opp_mult(opp_rank: int | None,
+             magnitude: float = OPP_MULT_MAGNITUDE) -> float:
+    """Multiplicative opponent adjustment on volume.
+
+    opp_mult = 1 + magnitude × (opp_pos_def_rank − 16.5) / 16.5, clipped
+    to OPP_MULT_CLIP. Rank 1 (best defense) → 1 − magnitude (depress);
+    rank 32 (worst) → 1 + magnitude (inflate). 16.5 is the midpoint of
+    a 32-team rank.
+    """
+    if opp_rank is None:
+        return 1.0
+    raw = 1.0 + magnitude * (float(opp_rank) - 16.5) / 16.5
+    lo, hi = OPP_MULT_CLIP
+    return max(lo, min(hi, raw))
+
+
+def share_projection(season: int, week: int, team: str, player: str,
+                     position: str, opp_rank: int | None,
+                     depth_team: int | None = None,
+                     k_share: float = K_SHARE,
+                     last_n: int = 3,
+                     opp_mult_magnitude: float = OPP_MULT_MAGNITUDE,
+                     apply_ebayes: bool = True,
+                     apply_roster: bool = True) -> dict:
+    """Full W10 share-model projection for one player.
+
+    Steps:
+      1. team_vol  = trailing-n mean of team's position-group weekly volume
+      2. trail_sh  = player.trailing_rate / team_vol
+      3. shrunk_sh = empirical-Bayes blend of trail_sh toward prior-season
+                     share (or positional-tier fallback for rookies),
+                     pseudo-count k_share
+      4. final_sh  = shrunk_sh + Σ(OUT_teammate_share × inherit_frac)
+                                − Σ(RETURNING_teammate_share × inherit_frac × frac_out)
+                     clipped to [0, 1]
+      5. projection = team_vol × final_sh × opp_mult
+
+    Returns a dict with every intermediate field plus audit notes.
+    """
+    through = week - 1
+    ws = max(0, through - last_n)  # trailing window exclusive start
+
+    # Team volume per game (used only to scale the final projection).
+    team_total_tr, team_weeks_tr = _team_pos_window_total(
+        season, team, position, ws, through)
+    tv = (team_total_tr / team_weeks_tr) if team_weeks_tr > 0 else None
+
+    # Trailing-window share: player's total / team's total over the SAME
+    # window. Part-time contributors stay correctly deflated.
+    pl_total_tr, pl_games_tr = _player_window_total(
+        season, team, player, position, ws, through)
+    n_season_in_window = pl_games_tr
+    trailing_share = (pl_total_tr / team_total_tr) if team_total_tr > 0 else None
+
+    # Season-to-date share (full ebayes evidence: not just the trailing
+    # window, and over weeks the player actually played).
+    season_total_pl, season_n = _player_window_total(
+        season, team, player, position, 0, through)
+    # Team denominator = sum across the SAME weeks (so a bye for the
+    # player doesn't deflate their share).
+    ps = _player_stats(season)
+    pl_season = ps[(ps.team == team) & (ps.player_display_name == player)
+                   & (ps.week <= through)]
+    weeks_pl = sorted(set(int(w) for w in pl_season.week.unique())) \
+        if not pl_season.empty else []
+    season_share = None
+    if weeks_pl:
+        weekly_team = _team_pos_weekly_vol(season, team, position, through)
+        tsum = float(weekly_team.loc[weekly_team.index.isin(weeks_pl)].sum())
+        if tsum > 0:
+            season_share = season_total_pl / tsum
+
+    # Prior-season share for the ebayes prior.
+    prior_share_val, prior_n = prior_season_share(season, player, position)
+    use_prior_data = prior_share_val is not None and prior_n >= 5
+    if use_prior_data:
+        prior_share_used = prior_share_val
+        prior_tag = "prior"
+    else:
+        prior_share_used = _share_fallback(position, depth_team)
+        prior_tag = "pos-prior"
+
+    # Shrunk share via empirical Bayes on share. Evidence = season-to-date
+    # share (more stable than the trailing-3 share for the ebayes step).
+    if apply_ebayes:
+        if season_share is not None and season_n > 0:
+            shrunk_share = (season_n * season_share
+                            + k_share * prior_share_used) / (season_n + k_share)
+        else:
+            shrunk_share = prior_share_used
+        # The final share blends in trailing-3 for recency, same shape as R-010.
+        recency_pseudo = k_share / 2.0
+        if trailing_share is not None and n_season_in_window > 0:
+            blended_share = (n_season_in_window * trailing_share
+                             + recency_pseudo * shrunk_share) \
+                            / (n_season_in_window + recency_pseudo)
+        else:
+            blended_share = shrunk_share
+    else:
+        # share_model baseline: pure trailing_share, no shrinkage. Fall
+        # back to prior/positional when the player didn't play in window.
+        shrunk_share = prior_share_used
+        blended_share = (trailing_share if trailing_share is not None
+                         else prior_share_used)
+
+    # Step 4: roster adjustments.
+    final_share = blended_share
+    out_notes: list[str] = []
+    returning_notes: list[str] = []
+
+    # OUT branch: same-position teammates not playing this week with
+    # trailing snap_pct ≥ floor.
+    out_map = _effectively_out(season, week, team, position)
+    out_map.pop(player, None)
+    actives = _active_same_pos(season, week, team, position, player)
+
+    # Build each active same-pos teammate's trailing snap_pct for the
+    # inheritance denominator.
+    active_snaps = {nm: _trailing_snap_pct(season, through, team, nm,
+                                           last_n=last_n)
+                    for nm in actives}
+    total_active_snap = sum(active_snaps.values())
+
+    if apply_roster and out_map and team_total_tr > 0:
+        own_snap = _trailing_snap_pct(season, through, team, player,
+                                      last_n=last_n)
+        own_cred = own_snap if own_snap > 0 else (trailing_share or 0.0)
+        min_tm_rate = (R008_MIN_RATE_RB if position == "RB"
+                       else R008_MIN_RATE_WR)
+        for nm, reason in out_map.items():
+            tm_snap = _trailing_snap_pct(season, through, team, nm,
+                                         last_n=last_n)
+            tm_total, tm_games = _player_window_total(
+                season, team, nm, position, ws, through)
+            if tm_games == 0:
+                continue
+            tm_rate_g = tm_total / tm_games
+            # Scrub filter: either a visible snap share or a volume rate
+            # above the noise floor. Missing snap rows don't disqualify a
+            # credible committee contributor.
+            if tm_snap < SHARE_OUT_SNAP_FLOOR and tm_rate_g < min_tm_rate:
+                continue
+            tm_share = tm_total / team_total_tr
+            # Credibility of each ACTIVE same-pos teammate, same rule as
+            # the queued player, for the denominator sum.
+            denom = own_cred
+            for other in actives:
+                os_snap = active_snaps.get(other, 0.0)
+                if os_snap > 0:
+                    denom += os_snap
+                else:
+                    o_tot, _ = _player_window_total(
+                        season, team, other, position, ws, through)
+                    denom += (o_tot / team_total_tr) if team_total_tr > 0 else 0.0
+            inherit_frac = own_cred / denom if denom > 0 else 1.0
+            delta = tm_share * inherit_frac
+            final_share += delta
+            tag = "OUT" if reason == "Out" else f"OUT ({reason})"
+            out_notes.append(
+                f"{nm} {tag}; +{tm_share:.3f} × {inherit_frac:.2f} share")
+
+    # RETURNING branch: same-position teammate active this week, out of at
+    # least one of the trailing-n weeks, with a non-trivial rate.
+    if apply_roster and week > last_n and team_total_tr > 0:
+        trailing_weeks = [week - last_n + i for i in range(last_n)]
+        min_rate = R008_MIN_RATE_RB if position == "RB" else R008_MIN_RATE_WR
+        own_snap_r = _trailing_snap_pct(season, through, team, player,
+                                         last_n=last_n)
+        own_cred_r = own_snap_r if own_snap_r > 0 else (trailing_share or 0.0)
+        for nm in actives:
+            frac_out = _frac_window_out(season, team, position,
+                                         trailing_weeks, nm)
+            if frac_out <= 0:
+                continue
+            # Teammate's share in games THEY played this season (sum over
+            # their played weeks, divided by team's sum over the same
+            # weeks).
+            ps_tm = ps[(ps.player_display_name == nm)
+                       & (ps.team == team) & (ps.week <= through)]
+            if ps_tm.empty:
+                continue
+            tm_weeks = sorted(set(int(w) for w in ps_tm.week.unique()))
+            if not tm_weeks:
+                continue
+            col = ps_tm.carries if position == "RB" else ps_tm.receptions
+            tm_total_season = float(col.sum())
+            if (tm_total_season / len(tm_weeks)) < min_rate:
+                continue
+            weekly_team_full = _team_pos_weekly_vol(season, team, position,
+                                                    through)
+            team_in_tm_weeks = float(weekly_team_full.loc[
+                weekly_team_full.index.isin(tm_weeks)].sum())
+            if team_in_tm_weeks <= 0:
+                continue
+            tm_share_in_games = tm_total_season / team_in_tm_weeks
+            denom = own_cred_r
+            for other in actives:
+                os_snap = active_snaps.get(other, 0.0)
+                if os_snap > 0:
+                    denom += os_snap
+                else:
+                    o_tot, _ = _player_window_total(
+                        season, team, other, position, ws, through)
+                    denom += (o_tot / team_total_tr) if team_total_tr > 0 else 0.0
+            inherit_frac = own_cred_r / denom if denom > 0 else 1.0
+            delta = tm_share_in_games * inherit_frac * frac_out
+            final_share -= delta
+            returning_notes.append(
+                f"{nm} returned (out {frac_out:.0%} of trailing); "
+                f"-{tm_share_in_games:.3f} × {inherit_frac:.2f} × {frac_out:.2f}")
+
+    final_share = max(0.0, min(1.0, final_share))
+
+    om = opp_mult(opp_rank, magnitude=opp_mult_magnitude)
+    projection = (tv * final_share * om) if tv is not None else 0.0
+
+    return {
+        "projection": round(float(projection), 2),
+        "team_vol": None if tv is None else round(float(tv), 2),
+        "trailing_share": (None if trailing_share is None
+                           else round(float(trailing_share), 4)),
+        "season_share": (None if season_share is None
+                          else round(float(season_share), 4)),
+        "prior_share": round(float(prior_share_used), 4),
+        "prior_tag": prior_tag,
+        "prior_n": int(prior_n),
+        "season_n": season_n,
+        "trailing_n": int(n_season_in_window),
+        "shrunk_share": round(float(shrunk_share), 4),
+        "final_share": round(float(final_share), 4),
+        "opp_mult": round(float(om), 3),
+        "out_notes": "; ".join(out_notes),
+        "returning_notes": "; ".join(returning_notes),
+    }
+
+
 def upcoming(season: int, week: int) -> pd.DataFrame:
     s = _schedules(season)
     return s[(s.week == week)].copy()

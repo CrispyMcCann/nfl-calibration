@@ -534,6 +534,33 @@ def _run_brier_mode(a) -> None:
                         base_rec_raw, base_car_raw, ps)
                     base_r008_no_r003 = (base_car_r008_no_r003 if market == "rushing"
                                          else base_rec_r008_no_r003)
+                    # W10 share-model variants. Projection comes from
+                    # team_vol × final_share × opp_mult; sigma scaling
+                    # reuses R-005' (position-aware). apply_r002=False
+                    # because opp_mult is already folded into the
+                    # projection. Position is passed so σ_eff scales per
+                    # position.
+                    def _share_myp(k_share: float, apply_ebayes: bool,
+                                   apply_roster: bool,
+                                   opp_mag: float) -> float:
+                        opp_rank_pos = (int(pass_rk) if market == "receiving"
+                                        and pass_rk is not None
+                                        else (int(rush_rk) if rush_rk is not None
+                                              else None))
+                        sp = D.share_projection(
+                            season, wk, team, pl["name"], pos,
+                            opp_rank=opp_rank_pos,
+                            depth_team=pl.get("depth_team"),
+                            k_share=k_share,
+                            apply_ebayes=apply_ebayes,
+                            apply_roster=apply_roster,
+                            opp_mult_magnitude=opp_mag)
+                        return compute_myp(
+                            market, side, sp["projection"], 60.0, line,
+                            pass_rank_opp=None, rush_rank_opp=None,
+                            apply_r002=False, apply_r001=False,
+                            sigma_scale=sc_r005b, position=pos)["my_p"]
+
                     variants_myp = {
                         "baseline":          compute_myp(market, side, base_raw, pace, line,
                                                          pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
@@ -607,6 +634,25 @@ def _run_brier_mode(a) -> None:
                                                          pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
                                                          apply_r002=True, apply_r001=False,
                                                          sigma_scale=sc_r005b)["my_p"],
+                        # W10 share-model variants.
+                        "share_model":   _share_myp(10, apply_ebayes=False,
+                                                     apply_roster=False, opp_mag=0.05),
+                        "share_ebayes":  _share_myp(10, apply_ebayes=True,
+                                                     apply_roster=False, opp_mag=0.05),
+                        "share_full":    _share_myp(10, apply_ebayes=True,
+                                                     apply_roster=True, opp_mag=0.05),
+                        # k_share sweep (ebayes + full roster).
+                        "share_k5":      _share_myp(5,  apply_ebayes=True,
+                                                     apply_roster=True, opp_mag=0.05),
+                        "share_k15":     _share_myp(15, apply_ebayes=True,
+                                                     apply_roster=True, opp_mag=0.05),
+                        "share_k20":     _share_myp(20, apply_ebayes=True,
+                                                     apply_roster=True, opp_mag=0.05),
+                        # opp_mult magnitude sweep.
+                        "share_opp003":  _share_myp(10, apply_ebayes=True,
+                                                     apply_roster=True, opp_mag=0.03),
+                        "share_opp008":  _share_myp(10, apply_ebayes=True,
+                                                     apply_roster=True, opp_mag=0.08),
                     }
                     rows.append({"season": season, "week": wk, "player": pl["name"],
                                  "market": market, "side": side,
@@ -628,7 +674,10 @@ def _run_brier_mode(a) -> None:
                         "r007", "r008", "r007_r008",
                         "r005_only", "r006_only", "r008_only",
                         "w8_no_r002", "w8_no_r003", "w8_no_r005", "w8_no_r006",
-                        "sigma_up", "r010", "w9")
+                        "sigma_up", "r010", "w9",
+                        "share_model", "share_ebayes", "share_full",
+                        "share_k5", "share_k15", "share_k20",
+                        "share_opp003", "share_opp008")
         for v in all_variants:
             b = ((df[f"myp_{v}"] - df.y) ** 2).mean()
             agg_rows.append({"season": season, "variant": v, "n": len(df), "brier": b})
@@ -659,7 +708,10 @@ def _run_brier_mode(a) -> None:
                     "r007", "r008", "r007_r008",
                     "r005_only", "r006_only", "r008_only",
                     "w8_no_r002", "w8_no_r003", "w8_no_r005", "w8_no_r006",
-                    "sigma_up", "r010", "w9"]
+                    "sigma_up", "r010", "w9",
+                    "share_model", "share_ebayes", "share_full",
+                    "share_k5", "share_k15", "share_k20",
+                    "share_opp003", "share_opp008"]
     out = pd.DataFrame(agg_rows).pivot(index="season", columns="variant", values="brier")
     out = out[all_variants]
     print("Brier per variant per season (lower is better)")
@@ -729,6 +781,23 @@ def _run_brier_mode(a) -> None:
         mean_v  = delta_w9[v].mean()
         verdict = "KEEP" if worst_v >= -0.0001 else "DROP"
         print(f"  {v:10s} worst {worst_v:+.4f}   mean {mean_v:+.4f}   →  {verdict}")
+    print()
+
+    print("Table 7 — W10 SHARE MODEL vs current W9 ('w9'). Positive = share")
+    print("variant improves calibration. Strict policy: ship share_full if")
+    print("(a) worst-season delta ≥ -0.0001, (b) mean delta ≥ +0.003, both vs W9.")
+    share_cols = ["share_model", "share_ebayes", "share_full",
+                  "share_k5", "share_k15", "share_k20",
+                  "share_opp003", "share_opp008"]
+    delta_share = -out[share_cols].sub(out["w9"], axis=0)
+    print(delta_share.to_string(float_format=lambda v: f"{v:+.4f}"))
+    print()
+    for v in share_cols:
+        worst_v = delta_share[v].min()
+        mean_v = delta_share[v].mean()
+        strict_pass = (worst_v >= -0.0001) and (mean_v >= 0.003)
+        verdict = "SHIP" if strict_pass else ("marginal" if worst_v >= -0.0001 else "DROP")
+        print(f"  {v:14s} worst {worst_v:+.4f}   mean {mean_v:+.4f}   →  {verdict}")
     print()
 
     print("Table 5 — ABLATION of the full W8 stack (R-002+R-003+R-005+R-006+R-008 =")
