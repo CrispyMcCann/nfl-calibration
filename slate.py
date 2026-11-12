@@ -204,12 +204,13 @@ def main():
                                   f"car {elev['base_car']:.1f}->{base_car_r006:.1f})")
                 else:
                     r006_notes = ""
-                # R-010 (W9): empirical-Bayes base. Shrinks the current-
-                # season observation toward prior-season full-year (or
+                # R-010 (W9) + R-010cap (W10): empirical-Bayes base shrinks
+                # the current-season observation toward prior-season (or
                 # positional mean for rookies) with pseudo-count = halflife
                 # (29.5 RB / 13.5 WR); blends with trailing-3 for recency.
-                # Applied to the R-003-elevated trailing mean so inheritance
-                # from an OUT teammate stays in the mix.
+                # Applied to the R-003-elevated trailing mean. W10 cap clips
+                # the output to trailing × [0.80, 1.20] so a scheme-changed
+                # player (Swift W9) can't be dragged beyond ±20%.
                 season_n_rec = D.season_games(SEASON, pl["name"], week - 1)
                 season_n_car = season_n_rec   # same n for both markets
                 prior_rec_mean, prior_rec_n = D.prior_full_season(
@@ -236,7 +237,18 @@ def main():
                               or _r010_fired(elev["base_car"], base_car_r010))
                 if r010_fires:
                     prior_tag = "prior" if (prior_car_n >= 5 or prior_rec_n >= 5) else "pos-prior"
-                    r010_notes = (f"ebayes[{prior_tag}, k={29.5 if pos=='RB' else 13.5}]: "
+                    # Flag when the ±20% cap actually clipped the ebayes output,
+                    # so the audit distinguishes "capped" from clean shrinkage.
+                    def _capped_rec() -> bool:
+                        tr = float(elev["base_rec"] or 0)
+                        return (tr > 0 and (abs(base_rec_r010 - tr) / max(tr, 1e-9)
+                                            >= D.R010_CAP_PCT - 1e-4))
+                    def _capped_car() -> bool:
+                        tr = float(elev["base_car"] or 0)
+                        return (tr > 0 and (abs(base_car_r010 - tr) / max(tr, 1e-9)
+                                            >= D.R010_CAP_PCT - 1e-4))
+                    cap_tag = " (capped)" if (_capped_rec() or _capped_car()) else ""
+                    r010_notes = (f"ebayes[{prior_tag}, k={29.5 if pos=='RB' else 13.5}]{cap_tag}: "
                                   f"rec {elev['base_rec']:.1f}->{base_rec_r010:.1f}, "
                                   f"car {elev['base_car']:.1f}->{base_car_r010:.1f} "
                                   f"(trail n={pl_gms}, cur n={season_n_rec}, "

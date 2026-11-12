@@ -510,6 +510,14 @@ R010_HALFLIFE_WR = 13.5    # ditto for WRs
 R010_POSITIONAL_PRIOR_RB = 14.0   # fallback for rookies / no-prior-year players (car/g)
 R010_POSITIONAL_PRIOR_WR =  5.0   # ditto (rec/g)
 
+# R-010cap (W10): magnitude cap on R-010's move from the raw trailing mean.
+# W9 data showed R-010 could drag a trailing 15.7 car/g down to 9.0 on
+# scheme-changed players (Swift to CHI) while leaving the fix intact for
+# hot-stretch over-estimates (Irving). Clipping the ebayes output to
+# trailing × [1 - R010_CAP_PCT, 1 + R010_CAP_PCT] preserves the regression
+# intent and bounds the swing.
+R010_CAP_PCT = 0.20
+
 
 @functools.lru_cache(maxsize=4)
 def _prior_season_player_stats(season: int) -> pd.DataFrame:
@@ -539,7 +547,9 @@ def prior_full_season(season: int, player: str,
 def ebayes_base(trailing_mean: float, trailing_n: int,
                  season_mean: float | None, season_n: int,
                  prior_mean: float | None, prior_n: int,
-                 position: str) -> float:
+                 position: str,
+                 apply_cap: bool = True,
+                 cap_pct: float = R010_CAP_PCT) -> float:
     """R-010 empirical-Bayes base: shrink the current-season observation
     toward the prior-season full-year average (or the positional
     fallback for rookies), then blend trailing-3 for recency weight.
@@ -553,6 +563,12 @@ def ebayes_base(trailing_mean: float, trailing_n: int,
     shrunk_season gets halflife/2 pseudo-games of weight. The shrunk
     estimate is already a composite so it's worth about half the raw
     prior's evidence weight.
+
+    R-010cap (W10): the composed output is clipped to
+    trailing × [1 - cap_pct, 1 + cap_pct]. Preserves the regression
+    intent, bounds the swing on scheme-changed players.
+    `apply_cap=False` reproduces W9 behaviour (uncapped) for backtest
+    comparisons.
 
     Returns the composed base (same units as the input means)."""
     k = R010_HALFLIFE_RB if position == "RB" else R010_HALFLIFE_WR
@@ -572,10 +588,18 @@ def ebayes_base(trailing_mean: float, trailing_n: int,
 
     # Blend with trailing-3 for recency weight.
     recency_pseudo = k / 2.0
+    tr = float(trailing_mean or 0)
     if trailing_n > 0:
-        return (trailing_n * float(trailing_mean or 0)
-                + recency_pseudo * shrunk_season) / (trailing_n + recency_pseudo)
-    return shrunk_season
+        out = (trailing_n * tr + recency_pseudo * shrunk_season) \
+              / (trailing_n + recency_pseudo)
+    else:
+        out = shrunk_season
+
+    if apply_cap and tr > 0:
+        lo = tr * (1.0 - cap_pct)
+        hi = tr * (1.0 + cap_pct)
+        out = max(lo, min(hi, out))
+    return out
 
 
 # R-008 constants. Deflation cap matches the symmetric magnitude a would-be

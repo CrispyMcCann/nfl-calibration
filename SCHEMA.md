@@ -199,7 +199,7 @@ this week.
 | 69 | `r008_fires` | bool-as-string | `True` if R-008 deflated the base this row |
 | 70 | `r008_notes` | string | audit string naming each returning teammate, their fraction of trailing weeks out, their season rate, and the applied deflation. Empty when R-008 doesn't fire. |
 
-### R-010 audit (4) — empirical-Bayes base
+### R-010 audit (4) — empirical-Bayes base (W10: capped)
 
 Appended at positions 71–74 for the W9 methodology bump. R-010 replaces
 R-006 on W9+ rows: it shrinks the current-season observation toward
@@ -211,16 +211,24 @@ exists (rookies), the fallback is a positional league-mean prior
 then blended with the R-003-elevated trailing-3 base using a recency
 pseudo-count of halflife/2.
 
+**W10 change (R-010cap):** on W10+ rows the ebayes output is clipped
+to `trailing × [0.80, 1.20]`. The column semantics don't change —
+`base_*_r010` is still the post-shrinkage base R-008 operates on —
+but the value is now bounded to ±20% of the raw trailing mean. The
+`r010_notes` string includes `(capped)` when the clip bound. See
+METHODOLOGY.md's "Between Week 9 and Week 10" section for the
+rationale.
+
 On W9+ rows R-008 operates on `base_*_r010`, not on `base_*_r006`.
 R-006 is still populated in columns 63–66 for continuity but is no
 longer a formula input.
 
 | # | column | type | notes |
 |---|---|---|---|
-| 71 | `base_rec_r010` | float | post-R-003 post-R-010 receiving base; R-008 input on W9+ |
-| 72 | `base_car_r010` | float | post-R-003 post-R-010 rushing base; R-008 input on W9+ |
-| 73 | `r010_fires` | bool-as-string | `True` when R-010 moved the base by more than 5% from R-003 output (nominal shrinkage). False only when the shrinkage result exactly matched R-003 output. |
-| 74 | `r010_notes` | string | audit string naming the prior source (`prior` for previous-season full-year, `pos-prior` for the positional fallback), the halflife, the pre/post bases, and the sample sizes used in the blend. Empty when R-010 doesn't fire. |
+| 71 | `base_rec_r010` | float | post-R-003 post-R-010 (post-cap on W10+) receiving base; R-008 input |
+| 72 | `base_car_r010` | float | post-R-003 post-R-010 (post-cap on W10+) rushing base; R-008 input |
+| 73 | `r010_fires` | bool-as-string | `True` when R-010 moved the base by more than 5% from R-003 output. False only when the shrinkage result exactly matched R-003 output. |
+| 74 | `r010_notes` | string | audit string naming the prior source (`prior` / `pos-prior`), the halflife, `(capped)` tag when the ±20% clip bound on W10+, pre/post bases, sample sizes. Empty when R-010 doesn't fire. |
 
 ---
 

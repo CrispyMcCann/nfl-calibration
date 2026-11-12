@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <title>Prediction Log</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -123,26 +124,25 @@
   <header>
     <p class="eyebrow">NFL game-script calibration</p>
     <h1>Prediction Log</h1>
-    <p class="sub">Your number goes in before the odds, and before kickoff. Rows stay editable until the game starts, then lock for good — every amendment is kept on the record.</p>
   </header>
 
   <details class="instructions" id="howto">
-    <summary>How to use this — read once, refer if you forget</summary>
+    <summary>How to use this</summary>
     <ol>
-      <li>Generate the week's slate: in the repo, <code>python slate.py --week N --json &gt; week_N.json</code>.</li>
-      <li>In <b>Step 1</b> below, pick the <code>week_N.json</code> file, hit <b>Load slate</b>. The queue starts automatically. Manual entry is a fallback only.</li>
-      <li>For each prop, in order: fill <b>line</b>, the <b>over/under</b> is locked to the side the queue assigned (over on core, under on control), so enter <b>your probability that that side hits</b> as a decimal (0.61 not 61), write <b>why</b> in one sentence naming the mechanism. Only then do the odds fields wake up.</li>
-      <li>Enter FanDuel's American odds for both sides. Include the sign: <code>-115</code>, <code>+105</code>. The devigged market probability appears live under the fields.</li>
-      <li>Hit <b>Log &amp; next</b>. The queue advances automatically. Do the whole queue in one sitting so the information set stays constant.</li>
-      <li>If a prop should be skipped (player out, no line, book suspended), write the reason into the <b>why</b> field and hit <b>Skip this one</b>. The skip is recorded in the CSV with the reason attached.</li>
-      <li>When the queue is empty, hit <b>Copy all as CSV</b>, paste into <code>ui_export.csv</code> in the repo (replace its contents), run <code>python merge.py</code>, then <code>git add predictions.csv &amp;&amp; git commit -m "week N logged" &amp;&amp; git push</code>. Never paste straight into <code>predictions.csv</code>: it holds resolved outcomes this page doesn't have. The commit before kickoff is what makes the record evidence.</li>
-      <li>Shortly before each game's kickoff, use the row's <b>Close price</b> button to capture the closing FanDuel price. After each game-day batch of closes: <b>Copy all as CSV</b> into <code>ui_export.csv</code>, <code>python merge.py</code>, commit + push.</li>
-      <li>Tuesday morning: <code>python resolve.py</code> to fill outcomes from nflverse, then <code>python score.py --plot calibration_wN.png</code> to update the calibration curve. Commit both.</li>
+      <li><code>python slate.py --week N --json &gt; week_N.json</code> in the repo.</li>
+      <li><b>Step 1</b>: pick <code>week_N.json</code>, hit <b>Load slate</b>. Queue starts automatically.</li>
+      <li>Per prop: fill <b>line</b>, then <b>your probability</b> (decimal, 0.61 not 61), then <b>why</b>. Odds fields unlock after.</li>
+      <li>Enter FanDuel American odds both sides with sign (<code>-115</code>, <code>+105</code>).</li>
+      <li><b>Log &amp; next</b> advances the queue. One sitting per week.</li>
+      <li>Skip: write reason into <b>why</b>, hit <b>Skip this one</b>.</li>
+      <li>Done: <b>Copy all as CSV</b> → paste into <code>ui_export.csv</code> → <code>python merge.py</code> → commit + push.</li>
+      <li>Pre-kickoff: row's <b>Close price</b> button captures closing FanDuel price. Merge + commit + push.</li>
+      <li>Tuesday: <code>python resolve.py</code>, then <code>python score.py --plot calibration_wN.png</code>, commit both.</li>
     </ol>
   </details>
 
   <h2>Step 1 · Load this week's slate</h2>
-  <p class="hint">Generate it with <code>python slate.py --week N --json &gt; week_N.json</code>, then pick the file below. This is the primary path — do not use manual entry unless the queue is broken.</p>
+  <p class="hint"><code>python slate.py --week N --json &gt; week_N.json</code>, pick the file below.</p>
 
   <div class="card loadcard" id="loadcard">
     <div class="row-btns" style="margin-top:0;align-items:center">
@@ -203,7 +203,7 @@
 
   <details class="manualwrap" id="manualwrap">
     <summary id="manualsum">Manual entry — fallback if the queue can't be used</summary>
-    <p class="hint" id="manualhint" style="margin-top:10px">Only use this if the queue is broken. The queue is the pre-registered path; manual entry means you're picking players yourself, which introduces discretion the design tries to eliminate.</p>
+    <p class="hint" id="manualhint" style="margin-top:10px">Fallback only — manual picking introduces discretion the queue is designed to eliminate.</p>
   <div class="card" id="freecard">
     <div class="readout" id="editbanner" hidden style="margin:0 0 14px"></div>
     <div class="step live" id="s1">
@@ -266,7 +266,7 @@
   </details>
 
   <h2>Step 3 · Everything you've logged</h2>
-  <p class="hint">Edit or delete anything until kickoff. After that the row is frozen — that lock is the whole reason this record is worth showing anyone.</p>
+  <p class="hint">Edit or delete until kickoff; locked after.</p>
   <div class="row-btns" style="margin-bottom:12px">
     <button type="button" id="copycsv">Copy all as CSV</button>
     <span class="note" id="csvnote"></span>
@@ -282,7 +282,7 @@
   <p class="note" id="sync"></p>
 
   <footer>
-    <p>Paste the CSV into <code>ui_export.csv</code> and run <code>python merge.py</code> to fold it into <code>predictions.csv</code>, then run <code>python resolve.py</code> to fill outcomes from nflverse and <code>python score.py</code> to score them. Amended rows keep their original values in the history, so the edit is visible rather than silent. Skipped rows are recorded with the reason and excluded from scoring.</p>
+    <p><code>ui_export.csv</code> → <code>merge.py</code> → <code>resolve.py</code> → <code>score.py</code>. Amendments keep original values; skipped rows record the reason and don't score.</p>
   </footer>
 </div>
 
@@ -296,7 +296,7 @@ const nowISO = () => new Date().toISOString();
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
 
-/* === METHODOLOGY :: W9-R002-R003b-R005b-R008-R010 =====================
+/* === METHODOLOGY :: W10-R005c-R010cap ================================
  * SYNC CONTRACT. The weekly probability formula lives in three places
  * that must stay IDENTICAL:
  *   1. METHODOLOGY.md — authoritative statement of the formula
@@ -306,36 +306,34 @@ function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
  * When you change this block, change METHODOLOGY.md and tools/calc.py
  * in the SAME commit and BUMP METH_VER to a new tag.
  *
- * Composition order for Week 9:
- *   1. R-003b base elevation      (slate.py; teammate OUT this week pushes base up)
- *   2. R-010 empirical Bayes      (slate.py; shrink current-season observation
- *                                  toward prior-season full-year with pseudo-count =
- *                                  Efron-Morris halflife, then blend trailing-3
- *                                  for recency — replaces R-006)
- *   3. R-008 backup-return defl.  (slate.py; teammate returning from trailing-3 outage
- *                                  pulls base back down — mirror of R-003)
- *   4. formula raw_expected       = base × (pace/60) × usage_factor + matchup_adjust_r002
- *   5. R-005' position-specific σ (sigma_eff = max(SIGMA, base × SIGMA_SCALE[position]))
- *   (R-001 threshold shrinkage retired W9 — ebayes in R-010 does the shrinkage)
+ * Composition order for Week 10:
+ *   1. R-003b base elevation      (slate.py; teammate OUT pushes base up)
+ *   2. R-010 empirical Bayes      (slate.py; shrink current-season obs
+ *                                  toward prior-season full-year,
+ *                                  pseudo-count = Efron-Morris halflife)
+ *   3. R-010cap magnitude clip    (slate.py; clip R-010 to
+ *                                  trailing × [0.80, 1.20] — NEW W10)
+ *   4. R-008 backup-return defl.  (slate.py; mirror of R-003)
+ *   5. formula raw_expected       = base × (pace/60) × usage_factor + matchup_adjust_r002
+ *   6. R-005c position-specific σ (sigma_eff = max(SIGMA, base × SIGMA_SCALE[position]))
+ *                                  SIGMA_SCALE bumped from 0.60/0.65 to
+ *                                  0.70/0.75 — NEW W10
+ *   (R-001 threshold shrinkage retired W9)
  *
- * `base` for the formula is base_*_r008 (the queue stub's post-R-003
- * post-R-010 post-R-008 value). Legacy queue stubs without r008 fall
- * through to r006 (W7) → r003 (W6) → raw.
- *
- * The erf is Abramowitz & Stegun 7.1.26, chosen to match math.erf used
- * by tools/calc.py. estimateProb mirrors tools/calc.py.one_prop exactly.
+ * `base` for the formula is base_*_r008 (R-003→R-010→R-010cap→R-008).
+ * estimateProb mirrors tools/calc.py.one_prop; erf is A&S 7.1.26.
  * ======================================================================= */
-const METH_VER = "W9-R002-R003b-R005b-R008-R010";
+const METH_VER = "W10-R005c-R010cap";
 const SIGMA = { rushing: 5.5, receiving: 2.5 };
 // R-002 constants. Position-specific EPA-allowed rank: 1=best D, 32=worst.
 const MATCHUP_BUMP = { rushing: 1.0, receiving: 0.5 };
 const MATCHUP_WORST_K = 8;
 const MATCHUP_BEST_K = 8;
-// R-005' (W9) position-specific variance scaling. Field-median CV
-// values from PlayerProfiler's Variance Manifesto (RB CV ~0.5-0.6, WR
-// CV ~0.6-0.7). Replaces the single 0.30 constant that was ~half the
-// field standard. sigma_eff = max(SIGMA[market], base × SIGMA_SCALE[pos]).
-const SIGMA_SCALE = { RB: 0.60, WR: 0.65 };
+// R-005c (W10) position-specific variance scaling. Bumped from W9's
+// 0.60/0.65 to 0.70/0.75 after W10 backtest showed sigma_cap20 passed
+// strict policy (worst +0.0018, mean +0.0031 across 2023-2025). Still
+// inside PlayerProfiler's field-median CV band.
+const SIGMA_SCALE = { RB: 0.70, WR: 0.75 };
 
 function erf(x) {
   const sign = x < 0 ? -1 : 1;
@@ -385,7 +383,7 @@ function estimateProb({ market, side, base, pace, usageFactor,
   const ma = Number.isFinite(matchupOverride) ? matchupOverride : r002;
   const mk = marketKey(market);
   const sigmaFloor = SIGMA[mk];
-  // R-005' (W9) position-specific sigma scaling. Default to RB values
+  // R-005c (W10) position-specific sigma scaling. Default to RB values
   // if position missing (slightly tighter is OK; the floor keeps us honest).
   const scale = SIGMA_SCALE[position === "WR" ? "WR" : "RB"];
   const sigma = Math.max(sigmaFloor, base * scale);
@@ -1113,8 +1111,11 @@ function recomputeFormula() {
   const r003 = q.r003_fires
     ? `<span style="color:var(--warn)">R-003 fired · base ${Number(rawBase).toFixed(2)} → ${Number(r003Base).toFixed(2)}</span>`
     : "";
+  // R-010cap: the slate's r010_notes string includes "(capped)" when the
+  // ±20% clip bound. Mirror that into the chip so the audit shows at a glance.
+  const r010Capped = typeof q.r010_notes === "string" && q.r010_notes.indexOf("(capped)") >= 0;
   const r010 = q.r010_fires
-    ? `<span style="color:var(--warn)">R-010 ebayes · base ${Number(r003Base).toFixed(2)} → ${Number(r010Base).toFixed(2)}</span>`
+    ? `<span style="color:var(--warn)">R-010 ebayes${r010Capped ? " (capped)" : ""} · base ${Number(r003Base).toFixed(2)} → ${Number(r010Base).toFixed(2)}</span>`
     : "";
   const r008 = q.r008_fires
     ? `<span style="color:var(--warn)">R-008 fired · base ${Number(r010Base || r003Base).toFixed(2)} → ${Number(base).toFixed(2)}</span>`
@@ -1122,9 +1123,9 @@ function recomputeFormula() {
   const r002 = r.r002Fired
     ? `<span style="color:var(--warn)">R-002 fired · matchup ${r.matchupAdjust>=0?"+":""}${r.matchupAdjust}</span>`
     : "";
-  // R-005' fires when base × SIGMA_SCALE[position] exceeds the market floor.
+  // R-005c fires when base × SIGMA_SCALE[position] exceeds the market floor.
   const r005 = r.r005Scaled
-    ? `<span style="color:var(--warn)">R-005' scaled · σ ${SIGMA[marketKey(q.market)]} → ${r.sigma}</span>`
+    ? `<span style="color:var(--warn)">R-005c scaled · σ ${SIGMA[marketKey(q.market)]} → ${r.sigma}</span>`
     : "";
   const overrideFlag = Number.isFinite(override)
     ? `<span style="color:var(--warn)">mean override</span>` : "";

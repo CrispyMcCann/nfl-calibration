@@ -31,8 +31,8 @@ from __future__ import annotations
 import math
 import sys
 
-# Constants — must match METHODOLOGY.md Week 9 AND ui.html's METHODOLOGY block.
-METH_VER = "W9-R002-R003b-R005b-R008-R010"
+# Constants — must match METHODOLOGY.md Week 10 AND ui.html's METHODOLOGY block.
+METH_VER = "W10-R005c-R010cap"
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
 SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}  # retired W9 (R-001 dropped)
 SHRINK_FACTOR = 0.5                                   # retired W9 (R-001 dropped)
@@ -44,13 +44,13 @@ MATCHUP_BUMP = {"rushing": 1.0, "receiving": 0.5}
 MATCHUP_WORST_K = 8
 MATCHUP_BEST_K = 8
 
-# R-005' (W9) upgraded variable-sigma scaling. Per-position after the
-# W9 ship: field-median CV values from PlayerProfiler's Variance
-# Manifesto (RB ~0.5-0.6, WR ~0.6-0.7). sigma_eff = max(SIGMA[market],
-# base × SIGMA_SCALE[position]).
-#   - RB floor binds for base < 9.17 car/g; scale binds above.
-#   - WR floor binds for base < 3.85 rec/g; scale binds above.
-SIGMA_SCALE = {"RB": 0.60, "WR": 0.65}
+# R-005c (W10) upgraded sigma scaling. Bumped from W9's 0.60/0.65 to
+# 0.70/0.75 after the W10 backtest showed sigma_cap20 passed strict
+# policy (worst +0.0018, mean +0.0031). Still inside PlayerProfiler's
+# field-median CV band (RB ~0.5-0.7, WR ~0.6-0.75).
+#   - RB floor binds for base < 7.86 car/g; scale binds above.
+#   - WR floor binds for base < 3.33 rec/g; scale binds above.
+SIGMA_SCALE = {"RB": 0.70, "WR": 0.75}
 # Legacy backtest callers that pass a scalar sigma_scale (e.g.,
 # validate.py's sweep) still work — compute_myp accepts a float too.
 
@@ -222,7 +222,7 @@ def one_prop() -> None:
     print(f"  deviation    = {deviation:+.3f}   "
           f"(threshold ±{threshold:.1f} for {market})")
     print(f"  expected      = raw_expected = {expected:.3f}  (R-001 retired W9)")
-    print(f"  σ_eff (R-005') = {sigma:.3f}  "
+    print(f"  σ_eff (R-005c) = {sigma:.3f}  "
           f"(position={pos}, scale={SIGMA_SCALE[pos]:.2f})")
     print(f"  z            = ({line:.1f} − {expected:.3f}) / {sigma:.3f} = {z:+.3f}")
     print()

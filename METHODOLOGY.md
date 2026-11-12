@@ -30,7 +30,7 @@ The formula below lives in three places that **must stay identical**:
 
 **Change any of them → change all three in the same commit, and bump
 `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`;
-current: `W9-R002-R003b-R005b-R008-R010`). Rows logged under the old tag keep it. New rows get
+current: `W10-R005c-R010cap`). Rows logged under the old tag keep it. New rows get
 the new tag. The write-up splits calibration by `methodology_version`
 band, so divergence between the three sources silently corrupts the
 record. If you're a future Claude and only one of the three looks like
@@ -594,14 +594,148 @@ hedging given the hot-stretch vs full-season tension.
 
 ---
 
-## Week 9 — the current strategy
+## Between Week 9 and Week 10 — what changed and why (shipped 2026-11-12)
 
-**Version tag:** `W9-R002-R003b-R005b-R008-R010`. Rows logged from
-Week 9 forward (and Week 8 Sun+Mon after the 2026-11-01 mid-week
-ship) carry this in `methodology_version`. Weeks 3–7 and Week 8 TNF
-keep their original tags and are scored under their own methodology.
+The W9 methodology beat market on the live record through W9 (46 rows,
+Brier Δ −0.0168) but splitting by game-week revealed the aggregate
+sign came from one lucky week. The W8 Sun+MNF slate (22 rows logged
+mid-W9 under W9 methodology) was Δ +0.0458 **worse** than market;
+the W9-proper slate (24 rows) was Δ −0.0742 **better**. 83% hit
+rate on 24 clean-week lines is a small-sample result driven by lines
+that happened to line up with where R-010 was deflating.
 
-**Composition order.** Five rules stack (R-001 and R-006 retired):
+Two live overconfident misses isolated the failure mode:
+
+- **D'Andre Swift** (CHI, W9 under 16.5 car at `my_p = 0.957`, actual
+  27). Trailing 15.7 → R-010 ebayes → 14.8 → R-008 committee
+  deflation → 9. Swift is now the featured back in CHI, but R-010
+  dragged him toward his 2025 DET committee average. R-010's
+  shrinkage was correctly pointed (toward the prior-year rate) but
+  far too large in magnitude.
+- **Tyler Allgeier** (ARI, W9 under 15.5 car at `my_p = 0.811`,
+  actual 17). Trailing 17.3 → ebayes 10.0 → R-003 +5 → 15. Same
+  shape: ebayes pulled a lead-back in a changed scheme too far
+  toward a prior backup role.
+
+Both Irving's W8 overconfidence (which W9 was designed to fix) and
+Swift's W9 overconfidence are the same mechanism — R-010 swinging
+too hard. For Irving it swung in the right direction (down from a
+hot stretch); for Swift it swung in the wrong direction (down from
+a stable new baseline). A full share-model rebuild was tried first
+(see [W10-SHARE registry entry](#rules-registry)); it fixed those
+two cases but lost Brier aggregate on 2023+2024+2025, failing
+strict policy on every variant. Freeze was the right call *for
+that rebuild*, not for the regular season.
+
+A smaller, more surgical pair of fixes was then tested:
+
+1. **R-010cap** — clip the R-010 output to
+   `trailing × [1 − 0.20, 1 + 0.20]`. Preserves the regression intent
+   but bounds the swing. Irving's Δ stays within 20% (fix survives);
+   Swift's trailing 15.7 can't be dragged below 12.6 (bug bounded).
+2. **R-005c** — bump `SIGMA_SCALE` from 0.60 RB / 0.65 WR to 0.70 RB
+   / 0.75 WR. Still inside PlayerProfiler's field-median CV band
+   (0.5–0.7 RB, 0.6–0.75 WR). Pure variance widening — every
+   `my_p = 0.95` becomes ≈0.85, so a miss costs half as much Brier.
+
+### Backtest: 2023 + 2024 + 2025 surgical-fix variants
+
+```
+Table 8 — W10 FIXES vs W9. Positive = fix improves calibration.
+Strict policy: ship if worst-season Δ ≥ −0.0001 AND mean Δ ≥ +0.003.
+
+variant             2023      2024      2025     worst     mean    verdict
+sigma_075         +0.0007   -0.0004   +0.0015  -0.0004  +0.0006   nearly
+sigma_085         +0.0014   -0.0007   +0.0026  -0.0007  +0.0011   nearly
+clamp_05          -0.0000   -0.0000   -0.0000  -0.0000  -0.0000   marginal
+clamp_10          +0.0001   -0.0001   -0.0000  -0.0001  +0.0000   nearly
+r010_cap20        +0.0046   +0.0023   +0.0017  +0.0017  +0.0029   nearly (just miss)
+r010_cap30        +0.0041   +0.0022   +0.0019  +0.0017  +0.0027   nearly
+sigma_clamp_05    +0.0007   -0.0004   +0.0015  -0.0004  +0.0006   nearly
+sigma_clamp_10    +0.0008   -0.0005   +0.0015  -0.0005  +0.0006   nearly
+sigma_cap20       +0.0044   +0.0018   +0.0030  +0.0018  +0.0031   SHIP  ★
+sigma_cap30       +0.0039   +0.0017   +0.0032  +0.0017  +0.0029   nearly
+w10_all           +0.0043   +0.0018   +0.0030  +0.0018  +0.0031   SHIP
+```
+
+`sigma_cap20` passes strict policy (worst +0.0018, mean +0.0031).
+The R-010 cap does most of the work (+0.0029 mean alone, just under
+the worst-season gate); the sigma bump adds the margin that seals
+it. The clamp [0.10, 0.90] adds nothing on the proxy backtest
+because the proxy lines rarely drive `my_p` outside that range —
+left out of the ship, since every piece of live methodology should
+earn its place in the backtest.
+
+**Changes shipped as `W10-R005c-R010cap` on 2026-11-12:**
+
+- **R-010cap (new):** `ebayes_base()` clips its output to
+  `trailing_mean × [0.80, 1.20]`. `apply_cap=False` preserves W9
+  behaviour for backtest callers.
+- **R-005c (new, supersedes R-005'):** `SIGMA_SCALE = {RB: 0.70,
+  WR: 0.75}`.
+- **R-002, R-003b, R-008, R-010 composition:** unchanged.
+
+**Composition order for W10:**
+
+```
+raw trailing-3
+  → R-003b (elevate for OUT teammate)
+  → R-010 ebayes (shrink toward prior-season / positional)
+  → R-010cap (clip to trailing × [0.80, 1.20])
+  → R-008 (deflate for RETURNING teammate)
+  → formula: expected = base × (pace/60) + R-002 matchup_bump
+  → R-005c sigma = max(SIGMA_floor, base × SIGMA_SCALE[position])
+                   with SIGMA_SCALE[RB] = 0.70, SIGMA_SCALE[WR] = 0.75
+```
+
+**Swift / Allgeier recompute under W10 methodology:**
+
+```
+Swift:    trailing 15.7, prior 0.59 share → ebayes ≈ 14.8 (W9)
+                                          → cap [12.56, 18.84]  → 14.8 unchanged
+          σ_eff = max(5.5, 14.8 × 0.70)   = 10.36
+          (W9 σ_eff was 14.8 × 0.60 = 8.88; move widens the distribution)
+
+Allgeier: trailing 17.3, prior 0.33 share → ebayes ≈ 10.0 (W9)
+                                          → cap [13.84, 20.76]  → 13.84 (clipped UP)
+          σ_eff = max(5.5, 13.84 × 0.70)  = 9.69
+          (prior-year drag bounded; base reflects current role)
+```
+
+### Share-model rebuild — not shipped, kept in repo
+
+Before trying the surgical fixes, a two-step share model
+(`team_vol × shrunk_share × opp_mult`) was prototyped and backtested
+on 2026-11-12. Every variant failed strict policy (best `share_k5`
+mean −0.0006, worst −0.0024). Kept in the repo as an honest
+dead-end record (`share_projection` in `nflcal/data.py` plus Table
+7 variants in `validate.py`) but no sync-contract touch. See the
+`W10-SHARE` entry in the rules registry.
+
+```
+Table 7 — W10 SHARE MODEL vs W9 (for the record).
+variant         2023      2024      2025      worst     mean     verdict
+share_model   -0.0058   -0.0158   -0.0011   -0.0158   -0.0076    DROP
+share_ebayes  -0.0021   -0.0086   -0.0016   -0.0086   -0.0041    DROP
+share_full    -0.0011   -0.0042   -0.0054   -0.0054   -0.0036    DROP
+share_k5      +0.0019   -0.0024   -0.0014   -0.0024   -0.0006    DROP
+```
+
+The structural reason is readable in retrospect: prior-season
+share is noisier than prior-season rate (coordinator / scheme /
+teammates all change). Share stability only pays off when the
+share estimate itself has low noise, which a one-year team-share
+prior doesn't deliver.
+
+---
+
+## Week 10 — the current strategy
+
+**Version tag:** `W10-R005c-R010cap`. Rows logged from Week 10
+forward carry this in `methodology_version`. Weeks 3–9 keep their
+original tags and are scored under their own methodology.
+
+**Composition order.** Six rules stack (R-001 and R-006 retired):
 
 ```
   R-003b (base elevation)  —>  slate.py adds inherited rec/car when a
@@ -610,31 +744,33 @@ keep their original tags and are scored under their own methodology.
   R-010 (empirical Bayes)  —>  slate.py shrinks the R-003-elevated
                                 trailing mean toward prior-season full-year
                                 with pseudo-count = Efron-Morris halflife
-                                (29.5 RB / 13.5 WR); output = base_*_r010
-  R-008 (backup-return)    —>  slate.py deflates base_*_r010 when a
-                                same-position teammate was out in some
-                                trailing-3 weeks but is active this week;
-                                output = base_*_r008, which is the
+                                (29.5 RB / 13.5 WR)
+  R-010cap (W10 new)       —>  clips R-010's output to
+                                trailing × [0.80, 1.20]. Bounds both
+                                over- and under-shrinkage. Preserves
+                                the Irving hot-stretch fix; bounds the
+                                Swift scheme-change over-drag.
+  R-008 (backup-return)    —>  slate.py deflates the R-010-capped base
+                                when a same-position teammate was out in
+                                some trailing-3 weeks but is active this
+                                week; output = base_*_r008, which is the
                                 FORMULA INPUT
   R-002 (matchup_adjust)   —>  additive bump from opp's position-specific
                                 EPA-allowed rank
   formula                  —>  expected = base_r008 × (pace/60) ×
                                            usage_factor + matchup_adjust
-  R-005' (variable sigma)  —>  sigma_eff = max(SIGMA[market],
-                                                base × SIGMA_SCALE[position])
+  R-005c (W10 new)         —>  sigma_eff = max(SIGMA[market],
+                                               base × SIGMA_SCALE[position])
+                                SIGMA_SCALE = {RB: 0.70, WR: 0.75}
 ```
 
-R-010 subsumes R-001's shrinkage role (continuous empirical-Bayes
-instead of threshold-gated halving). R-010 subsumes R-006's role
-(prior-season fallback instead of same-season no-op).
-
-**Sigma** — scales with base, per position (R-005'):
+**Sigma** — scales with base, per position (R-005c):
 ```
-SIGMA_SCALE = { RB: 0.60, WR: 0.65 }
+SIGMA_SCALE = { RB: 0.70, WR: 0.75 }
 sigma_eff = max(SIGMA[market], base × SIGMA_SCALE[position])
 ```
-- Rushing: floor `sigma = 5.5`; scale binds for base > 9.17 car/g.
-- Receptions: floor `sigma = 2.5`; scale binds for base > 3.85 rec/g.
+- Rushing: floor `sigma = 5.5`; scale binds for base > 7.86 car/g.
+- Receptions: floor `sigma = 2.5`; scale binds for base > 3.33 rec/g.
 
 **Mean formula:**
 ```
@@ -642,9 +778,8 @@ expected = base_r008 × (pace / 60) × usage_factor + matchup_adjust_r002
 ```
 
 - `base_r008` = `base_car_r008` for rushing, `base_rec_r008` for
-  receiving. On W9+ rows this equals `base_*_r010` after any R-008
-  deflation applies. On W8 rows the composition was R-003 → R-006
-  → R-008.
+  receiving. On W10 rows this equals the R-003-elevated-trailing
+  shrunk by R-010 and clipped by R-010cap, then deflated by R-008.
 - `pace` = team YTD plays/game ÷ 60.
 - `usage_factor` = 1.0 by default.
 - `matchup_adjust_r002` = R-002 output (see registry).
@@ -660,121 +795,19 @@ my_p = Φ(z)       for under
 
 ---
 
-## Between Week 9 and Week 10 — share-model rebuild investigated, **not shipped**
+## Week 9 — superseded strategy
 
-After Week 9 resolved, a post-mortem on the 46 W9-methodology rows
-showed an aggregate Brier delta vs market of −0.0168 — the first
-methodology to beat the market on the live record. Splitting by
-game-week revealed the sign had been driven by one lucky set of lines
-rather than a stable improvement:
+**Version tag:** `W9-R002-R003b-R005b-R008-R010`. Rows logged
+2026-11-01 to 2026-11-11 (W8 Sun+Mon mid-week ship, W9 full week)
+carry this. Superseded by W10's `R-005c` + `R-010cap` on 2026-11-12
+after live W8 Sun+MNF overconfidence (Swift under at 0.957 missed,
+Allgeier under at 0.811 missed) exposed R-010 over-swing on
+scheme-changed players.
 
-| game week | n | brier_you | brier_mkt | Δ |
-|---|---|---|---|---|
-| W8 Sun+MNF (logged mid-W9 under W9 methodology) | 22 | 0.3022 | 0.2564 | +0.0458 (worse) |
-| W9 (clean W9 methodology week) | 24 | 0.1746 | 0.2488 | −0.0742 (better) |
-
-Inspection of the biggest misses isolated a specific failure mode:
-R-010 shrinks a high-usage current RB toward their lower prior-season
-average, and this breaks when the underlying role changed
-structurally. Two live examples:
-
-- **D'Andre Swift** (under 16.5 car, my_p = 0.957, actual 27).
-  Trailing 15.7 → R-010 ebayes toward his 2025 DET committee share →
-  R-008 committee deflation → base ≈ 9. Swift is now the featured
-  back in CHI; the 2025 Detroit role is irrelevant to his 2026
-  usage.
-- **Tyler Allgeier** (under 15.5 car, my_p = 0.811, actual 17).
-  Trailing 17.3 → ebayes 10.0 (dragged toward 2025 ATL backup share)
-  → R-003 +5 car → base ≈ 15. Allgeier is now the lead ARI back
-  with Knight/Love/Benson/Conner out.
-
-The research memo filed 2026-11-01 (`project_w10_share_model` in the
-memory store) had already proposed the structural fix:
-**shrink the share, not the raw rate.** A share-model projection
-(`team_vol × shrunk_share × opp_mult`) estimates volume and role
-separately, so when a scheme changes the share stays stable through
-the transition.
-
-A W10 share-model rebuild was drafted, implemented behind a flag,
-and backtested across 2023 + 2024 + 2025. The strict ship policy
-required (a) worst-season Brier Δ ≥ −0.0001 vs W9 on all three
-seasons AND (b) mean Δ ≥ +0.003. **Every variant failed both
-gates.**
-
-### Backtest: 2023 + 2024 + 2025 share-model variants
-
-Line proxy is the median-rounded half-point (as in every prior
-backtest here — deltas on the same proxy are comparable; absolute
-Brier is not comparable to the live record).
-
-```
-Table 7 — W10 SHARE MODEL vs W9. Positive = share variant improves.
-variant         2023      2024      2025      worst     mean     verdict
-share_model   -0.0058   -0.0158   -0.0011   -0.0158   -0.0076    DROP
-share_ebayes  -0.0021   -0.0086   -0.0016   -0.0086   -0.0041    DROP
-share_full    -0.0011   -0.0042   -0.0054   -0.0054   -0.0036    DROP
-share_k5      +0.0019   -0.0024   -0.0014   -0.0024   -0.0006    DROP
-share_k15     -0.0049   -0.0072   -0.0088   -0.0088   -0.0070    DROP
-share_k20     -0.0083   -0.0101   -0.0113   -0.0113   -0.0099    DROP
-share_opp003  -0.0013   -0.0042   -0.0054   -0.0054   -0.0036    DROP
-share_opp008  -0.0008   -0.0042   -0.0054   -0.0054   -0.0035    DROP
-```
-
-Variants:
-- `share_model`: `team_vol × trailing_share × opp_mult`, no shrinkage,
-  no roster adjustments.
-- `share_ebayes`: adds ebayes shrinkage on share (pseudo-count
-  `k_share = 10`, blend evidence = season-to-date share, recency =
-  trailing-3).
-- `share_full`: adds the OUT-teammate share-inheritance and
-  RETURNING-teammate share-reclamation (replacing R-003 and R-008).
-- `share_k{5,15,20}`: `k_share` sweep around the default `10`.
-- `share_opp00{3,8}`: `opp_mult` magnitude sweep around the default
-  `0.05`.
-
-`share_k5` is the best-performing variant (mean −0.0006, worst
-−0.0024) and would be a near-coin-flip on aggregate — but it still
-fails both gates, and the worst-season gate (2024: −0.0024) is
-well outside the strict policy bound of ≥ −0.0001.
-
-### What this means — and why W9 stays frozen
-
-The share model fixes the specific overconfidence cases it was
-designed to fix (W10-era live sanity: Swift's projection goes from
-9 → 18.9, Allgeier's from ~15 → 21.3, both correctly reducing the
-my_p that got burned in W9). But it degrades calibration everywhere
-else — the Brier cost on the broader prop universe outweighs the
-Brier benefit on the specific failure cases.
-
-Two plausible structural reasons:
-
-1. **Prior-season share is noisier than prior-season rate.** A
-   rate ebayes draws a player's current rate toward their multi-game
-   prior-year rate, which is a stable signal. A share ebayes draws
-   it toward their prior-year *share of a particular team's offense*,
-   which changes with coordinator, scheme, teammates — the exact
-   factors the share model was supposed to normalize out. It's
-   possible share stability only pays off when the share estimation
-   has lower noise, which this prior construction doesn't deliver.
-
-2. **W9 is already strong.** The W9 methodology's backtest profile
-   was `mean +0.0099, worst +0.0064 vs W8` — an unusually clean
-   result. A rebuild had to clear a high bar, not just a neutral
-   bar.
-
-Per the backtest-first ship policy, W10 methodology stays frozen on
-`W9-R002-R003b-R005b-R008-R010`. Week 10 TNF (CIN @ BAL, Thu
-2026-11-13) and all subsequent regular-season rows log under W9.
-The share-model code (`share_projection` in `nflcal/data.py` plus
-the backtest variants in `validate.py`) stays in the repo — it's
-honest to keep the dead-end investigation visible — but no sync-
-contract file (`METHODOLOGY.md` section above, `ui.html`,
-`tools/calc.py`) gets a methodology version bump. `METH_VER` stays
-`W9-R002-R003b-R005b-R008-R010`.
-
-The rebuild gets re-examined post-season as part of the research
-pass, when the full prospective record is available to train
-against and the cost of methodology churn is zero.
+Composition was five rules: R-003b → R-010 → R-008 → formula →
+R-005' with `SIGMA_SCALE = {RB: 0.60, WR: 0.65}`. See the "Between
+Week 9 and Week 10" entry above for the full rationale, worked
+examples, and the backtest table that drove the W10 ship.
 
 ---
 
@@ -1220,7 +1253,7 @@ backtest:    2023 +0.0054, 2024 +0.0052, 2025 -0.0001 Brier delta vs
              anomalies, not a shippable rule change.
 ```
 
-### R-010 — empirical-Bayes shrinkage toward prior-season (added 2026-11-01, active Week 9; shipped mid-W8)
+### R-010 — empirical-Bayes shrinkage toward prior-season (added 2026-11-01, active Week 9; shipped mid-W8; **gated by R-010cap on W10+**)
 
 ```
 condition:   always runs on W9+ rows (replaces R-006 as the shrinkage
@@ -1294,7 +1327,7 @@ backtest:    2023 +0.0112, 2024 +0.0051, 2025 +0.0039 Brier delta vs
              — ≈3× the biggest previous ship.
 ```
 
-### R-005' — upgraded sigma scaling (field-median per position)  (added 2026-11-01, active Week 9; shipped mid-W8)
+### R-005' — upgraded sigma scaling (field-median per position)  (added 2026-11-01, active Week 9; **superseded by R-005c on 2026-11-12**)
 
 ```
 condition:   always runs on W9+ rows (replaces R-005's single 0.30 constant).
@@ -1328,6 +1361,77 @@ backtest:    sigma_up isolate: 2023 +0.0114, 2024 +0.0059, 2025 +0.0102.
              Worst-season +0.0059, mean +0.0091. Passes strict policy
              on every season by a wide margin — this change alone
              carries most of the W9 Brier gain.
+```
+
+### R-005c — upgraded sigma scaling (0.70 RB / 0.75 WR)  (added 2026-11-12, active Week 10)
+
+```
+condition:   always runs on W10+ rows (supersedes R-005').
+applies to:  both markets.
+effect:      SIGMA_SCALE = { RB: 0.70, WR: 0.75 }
+             sigma_eff = max(SIGMA[market], base × SIGMA_SCALE[position])
+
+             Floor binds for base < 7.86 car/g (RB) or 3.33 rec/g (WR).
+             For everything above those thresholds the scale is live.
+reasoning:   W9's R-005' (0.60/0.65) left live rows systematically
+             overconfident — 46 W9-methodology rows through W9
+             included multiple my_p > 0.80 unders that missed by
+             >10 units of volume (Swift 27 vs under 16.5, Allgeier 17
+             vs under 15.5). W10 backtest confirmed a further sigma
+             bump (0.70 RB / 0.75 WR) is net-positive on 2023-2025,
+             passes strict policy when paired with R-010cap, and
+             stays inside PlayerProfiler's field-median CV band
+             (0.5-0.7 RB, 0.6-0.75 WR).
+source:      live W9 overconfidence pattern (Swift, Allgeier) plus
+             2026-11-12 backtest table 8. Shipped 2026-11-12.
+tooling:     tools/calc.py SIGMA_SCALE dict; ui.html mirrors.
+backtest:    sigma_075 isolate vs W9: 2023 +0.0007, 2024 -0.0004,
+             2025 +0.0015. Alone just outside strict policy (mean
+             +0.0006, worst -0.0004). Paired with R-010cap as
+             sigma_cap20: 2023 +0.0044, 2024 +0.0018, 2025 +0.0030.
+             Worst +0.0018, mean +0.0031 — passes strict policy.
+```
+
+### R-010cap — magnitude cap on R-010 ebayes output  (added 2026-11-12, active Week 10)
+
+```
+condition:   always runs on W10+ rows alongside R-010.
+applies to:  both markets.
+effect:      base_r010 = clip(base_r010,
+                                trailing_mean × 0.80,
+                                trailing_mean × 1.20)
+
+             Clips both sides. A scheme-changed player whose
+             trailing rate is well above prior (Swift: 15.7 vs
+             DET committee) can't be dragged below 12.6; a hot-
+             stretch player whose trailing is well above the
+             sustainable level (Irving: 21.3 vs 17.3) still
+             regresses but only to 17.3 × 1.20 = 20.8 at most,
+             not to 17.95 or wherever full ebayes would land.
+reasoning:   W9's R-010 was correctly pointed (toward the prior-
+             season rate) but too large in magnitude — one-shot
+             shrinkage can swing 40% in a single prop. Capping
+             preserves the regression intent and keeps the Irving-
+             class fix, while bounding the Swift-class over-drag
+             on scheme changes.
+
+             20% is a practitioner-reasonable "max single-week
+             regression" step size — large enough to let ebayes
+             matter, small enough that no single move looks like
+             a different projection. Backtest sweep showed both
+             20% and 30% pass the worst-season gate in isolation;
+             20% has a slightly better mean.
+source:      W10 live sanity after Swift / Allgeier overconfidence;
+             backtest 2026-11-12.
+tooling:     nflcal/data.py ebayes_base() clips its output; slate.py
+             r010_notes shows "(capped)" when the clip bound. The
+             `apply_cap=False` flag preserves W9 behaviour for the
+             backtest "w9" baseline.
+backtest:    r010_cap20 isolate vs W9: 2023 +0.0046, 2024 +0.0023,
+             2025 +0.0017. Worst +0.0017, mean +0.0029 — just
+             outside the worst-season strict gate (-0.0001 bound).
+             Paired with R-005c as sigma_cap20: worst +0.0018, mean
+             +0.0031 — passes strict policy.
 ```
 
 ### W10-SHARE — share-model rebuild (investigated 2026-11-12, **not shipped**)

@@ -388,6 +388,88 @@ def _r008_deflate(season: int, week: int, team: str, position: str,
     return base_rec_adj, base_car_adj, bool(notes), "; ".join(notes)
 
 
+# W10 surgical-fix constants. See the "Between Week 9 and Week 10" section
+# of METHODOLOGY.md for the rationale (variance bump, anti-overconfidence
+# clamp, R-010 magnitude cap).
+W10_SIGMA_SCALE_RB_HI = 0.70
+W10_SIGMA_SCALE_WR_HI = 0.75
+W10_SIGMA_SCALE_RB_HIGHER = 0.80
+W10_SIGMA_SCALE_WR_HIGHER = 0.85
+
+
+def _clip_p(p: float, lo: float, hi: float) -> float:
+    """Tighten the W9 [0.02, 0.98] clamp to a narrower interval, post hoc."""
+    return max(lo, min(hi, float(p)))
+
+
+def _r010_capped(base_r010: float, trailing_mean: float,
+                 pct: float) -> float:
+    """Cap the magnitude of R-010's move from trailing_mean to pct%
+    (e.g., pct=0.20 means the R-010 output can deviate from the raw
+    trailing mean by at most 20% in either direction)."""
+    base_r010 = float(base_r010 or 0)
+    tr = float(trailing_mean or 0)
+    if tr <= 0:
+        return base_r010
+    lo = tr * (1.0 - pct)
+    hi = tr * (1.0 + pct)
+    return max(lo, min(hi, base_r010))
+
+
+def _w10_candidates(market, side, base_r010, pace, line, pass_rk, rush_rk,
+                    pos, trailing_mean) -> dict:
+    """Return the dict of W10 surgical-fix variant my_p values for one
+    prop. Separated from the big literal so each variant is on one line
+    and easy to audit.
+
+    Variants:
+      sigma_075:  W9 + sigma_scale 0.70 RB / 0.75 WR (variance bump).
+      sigma_085:  W9 + sigma_scale 0.80 RB / 0.85 WR (bigger bump).
+      clamp_05:   W9 with my_p clamped to [0.05, 0.95] post-hoc.
+      clamp_10:   W9 with my_p clamped to [0.10, 0.90].
+      r010_cap20: W9 with R-010 shrinkage capped at ±20% of trailing mean.
+      r010_cap30: W9 with R-010 shrinkage capped at ±30%.
+      sigma_clamp_05 / _10: combined.
+      sigma_cap20 / cap30:  sigma bump + R-010 cap.
+      w10_all:    sigma_075 + clamp_10 + cap20 (triple).
+    """
+    sc_hi = W10_SIGMA_SCALE_RB_HI if pos == "RB" else W10_SIGMA_SCALE_WR_HI
+    sc_higher = W10_SIGMA_SCALE_RB_HIGHER if pos == "RB" else W10_SIGMA_SCALE_WR_HIGHER
+    sc_w9 = R005B_SIGMA_SCALE_RB if pos == "RB" else R005B_SIGMA_SCALE_WR
+
+    base_cap20 = _r010_capped(base_r010, trailing_mean, 0.20)
+    base_cap30 = _r010_capped(base_r010, trailing_mean, 0.30)
+
+    def _myp(base, scale):
+        return compute_myp(market, side, base, pace, line,
+                           pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                           apply_r002=True, apply_r001=False,
+                           sigma_scale=scale)["my_p"]
+
+    w9       = _myp(base_r010, sc_w9)
+    s_075    = _myp(base_r010, sc_hi)
+    s_085    = _myp(base_r010, sc_higher)
+    cap20    = _myp(base_cap20, sc_w9)
+    cap30    = _myp(base_cap30, sc_w9)
+    s_cap20  = _myp(base_cap20, sc_hi)
+    s_cap30  = _myp(base_cap30, sc_hi)
+    w10_all_ = _myp(base_cap20, sc_hi)
+
+    return {
+        "sigma_075":       s_075,
+        "sigma_085":       s_085,
+        "clamp_05":        _clip_p(w9, 0.05, 0.95),
+        "clamp_10":        _clip_p(w9, 0.10, 0.90),
+        "r010_cap20":      cap20,
+        "r010_cap30":      cap30,
+        "sigma_clamp_05":  _clip_p(s_075, 0.05, 0.95),
+        "sigma_clamp_10":  _clip_p(s_075, 0.10, 0.90),
+        "sigma_cap20":     s_cap20,
+        "sigma_cap30":     s_cap30,
+        "w10_all":         _clip_p(w10_all_, 0.10, 0.90),
+    }
+
+
 def _run_brier_mode(a) -> None:
     """Per-variant Brier backtest. See the module docstring for policy."""
     seasons = [int(x) for x in a.seasons.split(",")]
@@ -634,6 +716,16 @@ def _run_brier_mode(a) -> None:
                                                          pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
                                                          apply_r002=True, apply_r001=False,
                                                          sigma_scale=sc_r005b)["my_p"],
+
+                        # W10 surgical-fix candidates. Each targets the
+                        # W9 overconfidence pattern without an architecture
+                        # rebuild. σ-bump = wider my_p spread; clamp =
+                        # hard anti-overconfidence ceiling; R-010 cap =
+                        # dampens shrinkage magnitude so it doesn't swing
+                        # in either direction.
+                        **(lambda: _w10_candidates(
+                            market, side, base_r010, pace, line, pass_rk, rush_rk,
+                            pos, trailing_mean))(),
                         # W10 share-model variants.
                         "share_model":   _share_myp(10, apply_ebayes=False,
                                                      apply_roster=False, opp_mag=0.05),
@@ -677,7 +769,11 @@ def _run_brier_mode(a) -> None:
                         "sigma_up", "r010", "w9",
                         "share_model", "share_ebayes", "share_full",
                         "share_k5", "share_k15", "share_k20",
-                        "share_opp003", "share_opp008")
+                        "share_opp003", "share_opp008",
+                        "sigma_075", "sigma_085", "clamp_05", "clamp_10",
+                        "r010_cap20", "r010_cap30",
+                        "sigma_clamp_05", "sigma_clamp_10",
+                        "sigma_cap20", "sigma_cap30", "w10_all")
         for v in all_variants:
             b = ((df[f"myp_{v}"] - df.y) ** 2).mean()
             agg_rows.append({"season": season, "variant": v, "n": len(df), "brier": b})
@@ -711,7 +807,11 @@ def _run_brier_mode(a) -> None:
                     "sigma_up", "r010", "w9",
                     "share_model", "share_ebayes", "share_full",
                     "share_k5", "share_k15", "share_k20",
-                    "share_opp003", "share_opp008"]
+                    "share_opp003", "share_opp008",
+                    "sigma_075", "sigma_085", "clamp_05", "clamp_10",
+                    "r010_cap20", "r010_cap30",
+                    "sigma_clamp_05", "sigma_clamp_10",
+                    "sigma_cap20", "sigma_cap30", "w10_all"]
     out = pd.DataFrame(agg_rows).pivot(index="season", columns="variant", values="brier")
     out = out[all_variants]
     print("Brier per variant per season (lower is better)")
@@ -781,6 +881,32 @@ def _run_brier_mode(a) -> None:
         mean_v  = delta_w9[v].mean()
         verdict = "KEEP" if worst_v >= -0.0001 else "DROP"
         print(f"  {v:10s} worst {worst_v:+.4f}   mean {mean_v:+.4f}   →  {verdict}")
+    print()
+
+    print("Table 8 — W10 SURGICAL FIXES vs current W9 ('w9'). Positive = fix")
+    print("improves calibration. Strict policy: ship a fix if worst-season")
+    print("delta >= -0.0001 AND mean delta >= +0.003. 'nearly' = worst in")
+    print("[-0.001, -0.0001] with mean > 0 (borderline; judgement call).")
+    w10_cols = ["sigma_075", "sigma_085", "clamp_05", "clamp_10",
+                "r010_cap20", "r010_cap30",
+                "sigma_clamp_05", "sigma_clamp_10",
+                "sigma_cap20", "sigma_cap30", "w10_all"]
+    delta_w10 = -out[w10_cols].sub(out["w9"], axis=0)
+    print(delta_w10.to_string(float_format=lambda v: f"{v:+.4f}"))
+    print()
+    for v in w10_cols:
+        worst_v = delta_w10[v].min()
+        mean_v  = delta_w10[v].mean()
+        strict_pass = (worst_v >= -0.0001) and (mean_v >= 0.003)
+        if strict_pass:
+            verdict = "SHIP"
+        elif (worst_v >= -0.001) and (mean_v > 0):
+            verdict = "nearly (borderline)"
+        elif worst_v >= -0.0001:
+            verdict = "marginal"
+        else:
+            verdict = "DROP"
+        print(f"  {v:18s} worst {worst_v:+.4f}   mean {mean_v:+.4f}   →  {verdict}")
     print()
 
     print("Table 7 — W10 SHARE MODEL vs current W9 ('w9'). Positive = share")
