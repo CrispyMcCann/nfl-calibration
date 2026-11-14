@@ -603,6 +603,21 @@ def _run_brier_mode(a) -> None:
                         base_rec_raw, base_car_raw,
                         base_rec_raw, base_car_raw, ps)
                     base_r008_only = base_car_r008_raw if market == "rushing" else base_rec_r008_raw
+                    # W11 candidates: how R-008 composes with the capped R-010
+                    # base. Live W10 subtracts R-008's deflation from the R-010
+                    # output; R-010 has usually already pulled the trailing
+                    # mean toward teammate-present games, so that can count
+                    # the same inflation twice.
+                    d_r008 = max(0.0, base_raw - base_r008_only)
+                    base_cap20_w11 = _r010_capped(base_r010, trailing_mean, 0.20)
+                    base_w10_live = max(0.0, base_cap20_w11 - d_r008)
+                    # Non-stacking: R-008 subtracts only what R-010 has not
+                    # already removed from the trailing mean. When R-010
+                    # moved the base up, this equals the live stack.
+                    already_removed = max(0.0, trailing_mean - base_cap20_w11)
+                    base_w11_nostack = max(0.0, base_cap20_w11
+                                           - max(0.0, d_r008 - already_removed))
+                    sc_w10 = W10_SIGMA_SCALE_RB_HI if pos == "RB" else W10_SIGMA_SCALE_WR_HI
                     base_rec_r008_no_r006, base_car_r008_no_r006, _, _ = _r008_deflate(
                         season, wk, team, pos, pl["name"],
                         elev["base_rec"], elev["base_car"],
@@ -726,6 +741,32 @@ def _run_brier_mode(a) -> None:
                         **(lambda: _w10_candidates(
                             market, side, base_r010, pace, line, pass_rk, rush_rk,
                             pos, trailing_mean))(),
+                        # W11: live W10 stack (R-010cap then R-008) vs
+                        # non-stacking R-008 (take the larger downward move).
+                        "w10_live":      compute_myp(market, side, base_w10_live, pace, line,
+                                                     pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                     apply_r002=True, apply_r001=False,
+                                                     sigma_scale=sc_w10)["my_p"],
+                        "w11_nostack":   compute_myp(market, side, base_w11_nostack, pace, line,
+                                                     pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                     apply_r002=True, apply_r001=False,
+                                                     sigma_scale=sc_w10)["my_p"],
+                        # W11 review candidates, each on the non-stacking base:
+                        # no pace multiplier (base was produced at the team's
+                        # own pace already), fixed sigma floors (residual SD of
+                        # volume is ~flat in the mean, not proportional), both.
+                        "w11_nopace":    compute_myp(market, side, base_w11_nostack, 60.0, line,
+                                                     pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                     apply_r002=True, apply_r001=False,
+                                                     sigma_scale=sc_w10)["my_p"],
+                        "w11_flatsig":   compute_myp(market, side, base_w11_nostack, pace, line,
+                                                     pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                     apply_r002=True, apply_r001=False,
+                                                     sigma_scale=0.0)["my_p"],
+                        "w11_nopace_flatsig": compute_myp(market, side, base_w11_nostack, 60.0, line,
+                                                     pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                                     apply_r002=True, apply_r001=False,
+                                                     sigma_scale=0.0)["my_p"],
                         # W10 share-model variants.
                         "share_model":   _share_myp(10, apply_ebayes=False,
                                                      apply_roster=False, opp_mag=0.05),
@@ -773,7 +814,9 @@ def _run_brier_mode(a) -> None:
                         "sigma_075", "sigma_085", "clamp_05", "clamp_10",
                         "r010_cap20", "r010_cap30",
                         "sigma_clamp_05", "sigma_clamp_10",
-                        "sigma_cap20", "sigma_cap30", "w10_all")
+                        "sigma_cap20", "sigma_cap30", "w10_all",
+                        "w10_live", "w11_nostack", "w11_nopace",
+                        "w11_flatsig", "w11_nopace_flatsig")
         for v in all_variants:
             b = ((df[f"myp_{v}"] - df.y) ** 2).mean()
             agg_rows.append({"season": season, "variant": v, "n": len(df), "brier": b})
@@ -788,6 +831,12 @@ def _run_brier_mode(a) -> None:
             print(f"  R-008 fired on {len(r008_hits)} props "
                   f"(sub-Brier all_r005_r006={((r008_hits.myp_all_r005_r006-r008_hits.y)**2).mean():.4f}, "
                   f"r008={((r008_hits.myp_r008-r008_hits.y)**2).mean():.4f})")
+        r8 = df[df.r008_fired]
+        if len(r8):
+            print(f"  W11 check on {len(r8)} R-008-fired props: "
+                  f"w10_live={((r8.myp_w10_live-r8.y)**2).mean():.4f}  "
+                  f"w11_nostack={((r8.myp_w11_nostack-r8.y)**2).mean():.4f}  "
+                  f"no_r008(sigma_cap20)={((r8.myp_sigma_cap20-r8.y)**2).mean():.4f}")
         small = df[df.small_n]
         if len(small):
             print(f"  small-N (gms<3) sub-Brier: "
@@ -811,7 +860,9 @@ def _run_brier_mode(a) -> None:
                     "sigma_075", "sigma_085", "clamp_05", "clamp_10",
                     "r010_cap20", "r010_cap30",
                     "sigma_clamp_05", "sigma_clamp_10",
-                    "sigma_cap20", "sigma_cap30", "w10_all"]
+                    "sigma_cap20", "sigma_cap30", "w10_all",
+                    "w10_live", "w11_nostack", "w11_nopace",
+                    "w11_flatsig", "w11_nopace_flatsig"]
     out = pd.DataFrame(agg_rows).pivot(index="season", columns="variant", values="brier")
     out = out[all_variants]
     print("Brier per variant per season (lower is better)")
@@ -907,6 +958,23 @@ def _run_brier_mode(a) -> None:
         else:
             verdict = "DROP"
         print(f"  {v:18s} worst {worst_v:+.4f}   mean {mean_v:+.4f}   →  {verdict}")
+    print()
+
+    print("Table 9 — W11: R-008 composition vs LIVE W10 ('w10_live' = R-010cap")
+    print("then R-008, sigma 0.70/0.75). 'sigma_cap20' = W10 without R-008.")
+    print("Strict policy: worst-season >= -0.0001 AND mean >= +0.003.")
+    w11_cols = ["w11_nostack", "sigma_cap20", "w11_nopace",
+                "w11_flatsig", "w11_nopace_flatsig"]
+    delta_w11 = -out[w11_cols].sub(out["w10_live"], axis=0)
+    print(delta_w11.to_string(float_format=lambda v: f"{v:+.4f}"))
+    print()
+    for v in w11_cols:
+        worst_v = delta_w11[v].min()
+        mean_v  = delta_w11[v].mean()
+        strict_pass = (worst_v >= -0.0001) and (mean_v >= 0.003)
+        verdict = ("SHIP" if strict_pass else
+                   "no-harm (worst >= -0.0001), below mean bar" if worst_v >= -0.0001 else "DROP")
+        print(f"  {v:14s} worst {worst_v:+.4f}   mean {mean_v:+.4f}   →  {verdict}")
     print()
 
     print("Table 7 — W10 SHARE MODEL vs current W9 ('w9'). Positive = share")

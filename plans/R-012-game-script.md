@@ -197,6 +197,72 @@ when this was written; results recorded below once the run finishes):
 - Not tested yet: R-010's shrinkage strength (cap binds on 23/36 week 10
   props) and R-003 being diluted by R-010. Each needs its own study.
 
-### W11 backtest results
+### W11 backtest results (run 2026-11-14, 2023–2025, `validate.py --mode brier`, Table 9)
 
-_(filled in when the run finishes)_
+Deltas vs **live W10** (`w10_live` = R-010cap then R-008, σ 0.70/0.75).
+Positive = lower Brier = better. Strict policy: worst ≥ −0.0001 and
+mean ≥ +0.003.
+
+| variant | 2023 | 2024 | 2025 | worst | mean | verdict |
+|---|---|---|---|---|---|---|
+| `w11_nostack` (R-008 net of R-010) | +0.0005 | −0.0006 | +0.0021 | −0.0006 | +0.0007 | DROP |
+| `sigma_cap20` (W10 without R-008) | −0.0009 | −0.0009 | +0.0031 | −0.0009 | +0.0005 | DROP |
+| **`w11_nopace`** (nostack + drop `× pace/60`) | **+0.0020** | **+0.0020** | **+0.0054** | **+0.0020** | **+0.0031** | **SHIP** |
+| `w11_flatsig` (nostack + σ floors only) | −0.0015 | −0.0008 | −0.0061 | −0.0061 | −0.0028 | DROP |
+| `w11_nopace_flatsig` | +0.0012 | +0.0036 | −0.0013 | −0.0013 | +0.0011 | DROP |
+
+R-008-fired subset (~100 props/season), sub-Brier: `w10_live` /
+`w11_nostack` = 0.2340/0.2313 (2023), 0.2149/0.2179 (2024),
+0.2236/0.2113 (2025). The non-stacking fix helps in 2 of 3 seasons on
+its own subset, but it doesn't pass on its own.
+
+Reading:
+
+- **Dropping the pace multiplier is the real win.** It's positive in
+  every season. It agrees with the independent MSE check (slope −0.61 RB
+  / −0.39 WR) and has a prior reason (the base is already produced at
+  the team's pace). It was tested **together with** `w11_nostack`; ship
+  exactly that combination, not pace-removal alone (untested).
+- **Fixed σ fails clearly**, even though the residual-SD analysis said
+  W10's σ is too wide. Likely reasons: the model's own mean error is
+  larger than the residual around the raw trailing average, and/or the
+  synthetic proxy lines (median-rounded) reward conservative σ. Open
+  question; keep σ 0.70/0.75. Don't revisit without real lines.
+- 5 variants were tested; `w11_nopace` is positive in all 3 seasons, so
+  it isn't one lucky season.
+
+### Grid definitions, given these results
+
+- **A** = live W10 unchanged (`w11_nostack` did not pass on its own).
+- **B** = `w11_nopace` = R-008 net of R-010 + no pace multiplier,
+  σ unchanged.
+
+### Week 10 decision
+
+- The 8 props already logged and pushed (`ff07633`) stay at
+  `W10-R005c-R010cap`. Never re-run.
+- The remaining week 10 props ship **once**, on whichever wins:
+  - If the R-012 grid finishes before the owner logs and a B-cell with
+    R-012 wins (2023–24 pick, 2025 confirm), ship that.
+  - Otherwise ship **B0** (`w11_nopace`) alone. It passed strict policy
+    today.
+- One ship for the rest of week 10, not two, so week 10 has at most two
+  version bands.
+
+### Shipping B0 (or a B-cell) — checklist
+
+1. `nflcal/data.py`: helper for R-008 net of R-010; `slate.py` uses it
+   where `deflation_r008` is applied to `base_*_r010` (around line 261).
+   Notes say `(net of R-010)` when it reduces the deflation.
+2. Drop the pace term from the formula: `ui.html` `estimateProb`
+   (`raw = base × uf + ma`), `tools/calc.py compute_myp` (live path),
+   METHODOLOGY.md formula. Keep `pace` in the queue and CSV as a control
+   column. `validate.py` keeps its explicit pace argument for old
+   variants.
+3. Bump `METH_VER` in `ui.html` and `tools/calc.py` (e.g.
+   `W10b-R005c-R010cap-R008net-nopace`). Add the METHODOLOGY.md section
+   and registry entries.
+4. Regenerate `week_10.json`; check Woody Marks base 14.34 and that the
+   UI's expected = base (no pace) + R-002.
+5. Republish the UI; confirm the live page equals `ui.html`.
+6. Commit, push; the owner reloads the slate and finishes the queue.
