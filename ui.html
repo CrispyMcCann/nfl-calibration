@@ -176,7 +176,7 @@
         <label><span class="lab">Line (FanDuel)</span><input type="number" id="qline" step="0.5" placeholder="4.5"></label>
         <label><span class="lab">Over / under</span><select id="qou" disabled title="Locked to the queued side. Enter your probability that this side hits.">
           <option value="over">Over</option><option value="under">Under</option></select></label>
-        <label><span class="lab" title="Optional. If blank, formula uses base × (pace/60). If filled, your value replaces the formula's raw expected; R-001 still applies.">Mean override (optional)</span><input type="number" id="qexpected" step="0.1" placeholder="auto"></label>
+        <label><span class="lab" title="Optional. If blank, formula uses base × game-script multiplier. If filled, your value replaces the formula's raw expected; R-001 still applies.">Mean override (optional)</span><input type="number" id="qexpected" step="0.1" placeholder="auto"></label>
         <label><span class="lab">Your probability (0–1)</span><input type="number" id="qmyp" step="0.01" min="0.01" max="0.99" placeholder="auto"></label>
       </div>
       <div class="readout" id="qformula" style="margin-top:10px;display:none"></div>
@@ -296,7 +296,7 @@ const nowISO = () => new Date().toISOString();
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
 
-/* === METHODOLOGY :: W10-R005c-R010cap ================================
+/* === METHODOLOGY :: W10b-R005c-R010cap-R011-R013 ==================
  * SYNC CONTRACT. The weekly probability formula lives in three places
  * that must stay IDENTICAL:
  *   1. METHODOLOGY.md — authoritative statement of the formula
@@ -314,7 +314,11 @@ function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
  *   3. R-010cap magnitude clip    (slate.py; clip R-010 to
  *                                  trailing × [0.80, 1.20] — NEW W10)
  *   4. R-008 backup-return defl.  (slate.py; mirror of R-003)
- *   5. formula raw_expected       = base × (pace/60) × usage_factor + matchup_adjust_r002
+ *      R-011 (W10b): R-008 net of R-010 — subtract only what R-010 has
+ *      not already removed (slate.py, nflcal.data.r008_net_of_r010)
+ *   5. formula raw_expected       = base × script_mult + matchup_adjust_r002
+ *      R-013 (W10b): no pace multiplier. script_mult is R-012's slot;
+ *      R-012 did not ship, so it is 1.0 (absent from the slate).
  *   6. R-005c position-specific σ (sigma_eff = max(SIGMA, base × SIGMA_SCALE[position]))
  *                                  SIGMA_SCALE bumped from 0.60/0.65 to
  *                                  0.70/0.75 — NEW W10
@@ -323,7 +327,7 @@ function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
  * `base` for the formula is base_*_r008 (R-003→R-010→R-010cap→R-008).
  * estimateProb mirrors tools/calc.py.one_prop; erf is A&S 7.1.26.
  * ======================================================================= */
-const METH_VER = "W10-R005c-R010cap";
+const METH_VER = "W10b-R005c-R010cap-R011-R013";
 const SIGMA = { rushing: 5.5, receiving: 2.5 };
 // R-002 constants. Position-specific EPA-allowed rank: 1=best D, 32=worst.
 const MATCHUP_BUMP = { rushing: 1.0, receiving: 0.5 };
@@ -377,7 +381,10 @@ function matchupAdjustR002(market, passRankOpp, rushRankOpp) {
 function estimateProb({ market, side, base, pace, usageFactor,
                         passRankOpp, rushRankOpp, matchupOverride, line,
                         position }) {
-  if (!Number.isFinite(base) || !Number.isFinite(pace) || !Number.isFinite(line)) return null;
+  // W11: pace no longer enters the formula (the base was already produced
+  // at the team's own pace; backtest w11_nopace). `pace` stays a parameter
+  // so callers don't change; it is a control column only.
+  if (!Number.isFinite(base) || !Number.isFinite(line)) return null;
   const uf = Number.isFinite(usageFactor) ? usageFactor : 1.0;
   const r002 = matchupAdjustR002(market, passRankOpp, rushRankOpp);
   const ma = Number.isFinite(matchupOverride) ? matchupOverride : r002;
@@ -387,7 +394,7 @@ function estimateProb({ market, side, base, pace, usageFactor,
   // if position missing (slightly tighter is OK; the floor keeps us honest).
   const scale = SIGMA_SCALE[position === "WR" ? "WR" : "RB"];
   const sigma = Math.max(sigmaFloor, base * scale);
-  const raw = base * (pace / 60) * uf + ma;
+  const raw = base * uf + ma;
   const dev = raw - base;
   // R-001 retired W9 — raw IS expected now.
   const expected = raw;
@@ -625,9 +632,10 @@ $("save").addEventListener("click", async () => {
                 : Number.isFinite(baseR006) ? baseR006
                 : Number.isFinite(baseR003) ? baseR003 : baseRaw;
     const pace = parseFloat(prev.pace);
-    const r = Number.isFinite(base) && Number.isFinite(pace)
+    const ufP = Number.isFinite(parseFloat(prev.script_mult)) ? parseFloat(prev.script_mult) : 1.0;
+    const r = Number.isFinite(base)
       ? estimateProb({ market: prev.market, side: prev.side || prev.expect,
-                       base, pace, usageFactor: 1.0, line: v.line,
+                       base, pace, usageFactor: ufP, line: v.line,
                        passRankOpp: parseFloat(prev.pass_def_rank_opp),
                        rushRankOpp: parseFloat(prev.rush_def_rank_opp),
                        position: prev.position
@@ -659,7 +667,7 @@ $("save").addEventListener("click", async () => {
     const base = Number.isFinite(baseR008) ? baseR008
                 : Number.isFinite(baseR006) ? baseR006
                 : Number.isFinite(baseR003) ? baseR003 : baseRaw;
-    const r = Number.isFinite(base) && Number.isFinite(v.pace)
+    const r = Number.isFinite(base)
       ? estimateProb({ market: v.market, side: v.side,
                        base, pace: v.pace, usageFactor: 1.0, line: v.line,
                        passRankOpp: v.pass_def_rank_opp,
@@ -1057,6 +1065,8 @@ function recomputeFormula() {
   // R-005' position-specific sigma scaling needs the position label.
   const position = q.position || (q.market === "rush_attempts" ? "RB" : "WR");
   const override = parseFloat($("qexpected").value);
+  // R-012 game-script multiplier from the slate (1.0 when absent).
+  const ufQ = Number.isFinite(parseFloat(q.script_mult)) ? parseFloat(q.script_mult) : 1.0;
   // If user supplied a mean override, treat it as raw_expected. Otherwise
   // compute from the queue's base × pace (with R-002 picked up from the
   // opp's position-specific defense rank).
@@ -1064,17 +1074,17 @@ function recomputeFormula() {
   if (Number.isFinite(override)) {
     // Inject the override by passing it via matchupOverride so the
     // existing estimateProb handles everything uniformly, bypassing R-002.
-    const expectedBase = base * (q.pace / 60);
+    const expectedBase = base * ufQ;
     r = estimateProb({
       market: q.market, side: q.expect, base, pace: q.pace,
-      usageFactor: 1.0, matchupOverride: override - expectedBase, line,
+      usageFactor: ufQ, matchupOverride: override - expectedBase, line,
       passRankOpp: q.pass_def_rank_opp, rushRankOpp: q.rush_def_rank_opp,
       position,
     });
   } else {
     r = estimateProb({
       market: q.market, side: q.expect, base, pace: q.pace,
-      usageFactor: 1.0, line,
+      usageFactor: ufQ, line,
       passRankOpp: q.pass_def_rank_opp, rushRankOpp: q.rush_def_rank_opp,
       position,
     });

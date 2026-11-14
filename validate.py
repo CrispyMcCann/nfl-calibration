@@ -618,6 +618,26 @@ def _run_brier_mode(a) -> None:
                     base_w11_nostack = max(0.0, base_cap20_w11
                                            - max(0.0, d_r008 - already_removed))
                     sc_w10 = W10_SIGMA_SCALE_RB_HI if pos == "RB" else W10_SIGMA_SCALE_WR_HI
+                    # R-012 grid (plans/R-012-game-script.md). Script multiplier
+                    # goes in usage_factor, so sigma stays tied to the base.
+                    sctx = D.script_context(season, team, wk, pl["name"])
+                    dm = sctx["d_margin"] if sctx else 0.0
+                    dt = sctx["d_total"] if sctx else 0.0
+                    r012_mult = {
+                        "0": 1.0,
+                        "1": D.script_mult_r012(pos, dm, dt, use_margin=True, use_total=False),
+                        "2": D.script_mult_r012(pos, dm, dt, use_margin=False, use_total=True),
+                        "3": D.script_mult_r012(pos, dm, dt, use_margin=True, use_total=True),
+                    }
+
+                    def _grid(stack: str, cell: str) -> float:
+                        base_g, pace_g = ((base_w10_live, pace) if stack == "A"
+                                          else (base_w11_nostack, 60.0))
+                        return compute_myp(market, side, base_g, pace_g, line,
+                                           pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                           usage_factor=r012_mult[cell],
+                                           apply_r002=True, apply_r001=False,
+                                           sigma_scale=sc_w10)["my_p"]
                     base_rec_r008_no_r006, base_car_r008_no_r006, _, _ = _r008_deflate(
                         season, wk, team, pos, pl["name"],
                         elev["base_rec"], elev["base_car"],
@@ -658,6 +678,8 @@ def _run_brier_mode(a) -> None:
                             apply_r002=False, apply_r001=False,
                             sigma_scale=sc_r005b, position=pos)["my_p"]
 
+                    if a.grid_only:
+                        _share_myp = lambda *x, **k: float("nan")  # noqa: E731
                     variants_myp = {
                         "baseline":          compute_myp(market, side, base_raw, pace, line,
                                                          pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
@@ -767,6 +789,8 @@ def _run_brier_mode(a) -> None:
                                                      pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
                                                      apply_r002=True, apply_r001=False,
                                                      sigma_scale=0.0)["my_p"],
+                        # R-012 declared grid: A = live W10, B = w11_nopace.
+                        **{f"grid_{st}{c}": _grid(st, c) for st in "AB" for c in "0123"},
                         # W10 share-model variants.
                         "share_model":   _share_myp(10, apply_ebayes=False,
                                                      apply_roster=False, opp_mag=0.05),
@@ -816,7 +840,8 @@ def _run_brier_mode(a) -> None:
                         "sigma_clamp_05", "sigma_clamp_10",
                         "sigma_cap20", "sigma_cap30", "w10_all",
                         "w10_live", "w11_nostack", "w11_nopace",
-                        "w11_flatsig", "w11_nopace_flatsig")
+                        "w11_flatsig", "w11_nopace_flatsig",
+                        *[f"grid_{st}{c}" for st in "AB" for c in "0123"])
         for v in all_variants:
             b = ((df[f"myp_{v}"] - df.y) ** 2).mean()
             agg_rows.append({"season": season, "variant": v, "n": len(df), "brier": b})
@@ -862,7 +887,8 @@ def _run_brier_mode(a) -> None:
                     "sigma_clamp_05", "sigma_clamp_10",
                     "sigma_cap20", "sigma_cap30", "w10_all",
                     "w10_live", "w11_nostack", "w11_nopace",
-                    "w11_flatsig", "w11_nopace_flatsig"]
+                    "w11_flatsig", "w11_nopace_flatsig",
+                    *[f"grid_{st}{c}" for st in "AB" for c in "0123"]]
     out = pd.DataFrame(agg_rows).pivot(index="season", columns="variant", values="brier")
     out = out[all_variants]
     print("Brier per variant per season (lower is better)")
@@ -977,6 +1003,30 @@ def _run_brier_mode(a) -> None:
         print(f"  {v:14s} worst {worst_v:+.4f}   mean {mean_v:+.4f}   →  {verdict}")
     print()
 
+    print("Table 10 — R-012 DECLARED GRID vs live W10 (grid_A0 == w10_live).")
+    print("Protocol (plans/R-012-game-script.md): pick the winner on 2023-2024")
+    print("with strict policy; confirm only the winner on 2025 (delta >= -0.0001).")
+    gcols = [f"grid_{st}{c}" for st in "AB" for c in "0123" if f"{st}{c}" != "A0"]
+    dg = -out[gcols].sub(out["grid_A0"], axis=0)
+    print(dg.to_string(float_format=lambda v: f"{v:+.4f}"))
+    print()
+    sel = [s_ for s_ in (2023, 2024) if s_ in dg.index]
+    cands = []
+    for v in gcols:
+        w_ = dg.loc[sel, v].min(); m_ = dg.loc[sel, v].mean()
+        ok = (w_ >= -0.0001) and (m_ >= 0.003)
+        print(f"  {v:8s} 2023-24 worst {w_:+.4f} mean {m_:+.4f}  →  {'passes' if ok else 'fails'}")
+        if ok:
+            cands.append((m_, v))
+    if cands:
+        win = max(cands)[1]
+        conf = dg.loc[2025, win] if 2025 in dg.index else float("nan")
+        verdict = "SHIP" if conf >= -0.0001 else "FAILS 2025 — nothing ships"
+        print(f"\n  winner on 2023-24: {win}   2025 delta {conf:+.4f}  →  {verdict}")
+    else:
+        print("\n  no cell passes on 2023-24 — nothing from the grid ships")
+    print()
+
     print("Table 7 — W10 SHARE MODEL vs current W9 ('w9'). Positive = share")
     print("variant improves calibration. Strict policy: ship share_full if")
     print("(a) worst-season delta ≥ -0.0001, (b) mean delta ≥ +0.003, both vs W9.")
@@ -1029,6 +1079,8 @@ def main():
     ap.add_argument("--variant", default="all-table",
                     choices=("baseline", "r002", "r003", "all", "all-table"),
                     help="brier mode only; 'all-table' prints every variant")
+    ap.add_argument("--grid-only", action="store_true",
+                    help="skip the slow share-model variants (their columns are NaN)")
     ap.add_argument("--sigma-scale", type=float, default=0.30,
                     help="R-005 candidate: sigma_eff = max(SIGMA, base × this). "
                          "Default 0.30. Sweep via repeated runs: 0.20, 0.25, 0.30, 0.35.")

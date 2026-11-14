@@ -1250,3 +1250,90 @@ def pace(season: int, through_week: int) -> pd.Series:
         return pd.Series(dtype=float)
     ts = ts.assign(plays=ts.attempts + ts.carries)
     return ts.groupby("team")["plays"].mean()
+
+
+# ---------------------------------------------------------------------------
+# R-012 game-script adjustment (see plans/R-012-game-script.md).
+#
+# The base is a trailing average, and those trailing games had their own
+# game scripts. R-012 therefore scales by the CHANGE in script between this
+# week and the games that built the base:
+#   d_margin = this game's expected margin − mean expected margin of base games
+#   d_total  = this game's implied team total − mean implied total of base games
+#   script_mult = exp(b_margin·d_margin + b_total·d_total), clipped.
+# Coefficients are fit on 2019–2022 only by tools/fit_r012.py; the backtest
+# seasons (2023–2025) are never used to fit them.
+# ---------------------------------------------------------------------------
+
+# position -> (b_margin, b_total), from tools/fit_r012.py on 2019-2022
+# (2026-11-14). Rule declared in the plan: a coefficient with the wrong
+# sign or a 95% CI spanning 0 is set to 0.
+#   RB b_margin +0.0069 [+0.0015, +0.0117]  kept
+#   RB b_total  -0.0054 [-0.0153, +0.0044]  wrong sign, CI spans 0 -> 0
+#   WR b_margin -0.0002 [-0.0052, +0.0059]  CI spans 0 -> 0
+#   WR b_total  +0.0037 [-0.0080, +0.0142]  CI spans 0 -> 0
+R012_COEF = {"RB": (0.0069, 0.0), "WR": (0.0, 0.0)}
+R012_CLIP = (0.85, 1.15)
+
+
+@functools.lru_cache(maxsize=16)
+def team_game_script(season: int) -> pd.DataFrame:
+    """One row per team-game: week, team, exp_margin (team perspective,
+    positive = team favored), imp_total (team's implied points)."""
+    s = _schedules(season)
+    s = s[s.spread_line.notna() & s.total_line.notna()]
+    rows = []
+    for g in s.itertuples(index=False):
+        home_imp, away_imp = implied_totals(float(g.spread_line), float(g.total_line))
+        rows.append((int(g.week), g.home_team, float(g.spread_line), home_imp))
+        rows.append((int(g.week), g.away_team, -float(g.spread_line), away_imp))
+    return pd.DataFrame(rows, columns=["week", "team", "exp_margin", "imp_total"])
+
+
+def script_context(season: int, team: str, week: int, player: str,
+                   last_n: int = 3) -> dict | None:
+    """This week's script for `team`, the mean script over the games that
+    built `player`'s trailing base (his games for `team` in weeks
+    week-last_n .. week-1, the same window usage() uses), and the deltas.
+    None when either side is unavailable."""
+    gs = team_game_script(season)
+    now = gs[(gs.team == team) & (gs.week == week)]
+    if now.empty:
+        return None
+    ps = _player_stats(season)
+    played = ps[(ps.player_display_name == player) & (ps.team == team)
+                & (ps.week < week) & (ps.week >= week - last_n)].week.unique()
+    ctx = gs[(gs.team == team) & (gs.week.isin(played))]
+    if ctx.empty:
+        return None
+    m_now, t_now = float(now.exp_margin.iloc[0]), float(now.imp_total.iloc[0])
+    m_base, t_base = float(ctx.exp_margin.mean()), float(ctx.imp_total.mean())
+    return {"margin_now": m_now, "margin_base": m_base, "d_margin": m_now - m_base,
+            "total_now": t_now, "total_base": t_base, "d_total": t_now - t_base,
+            "n_base": int(len(ctx))}
+
+
+def script_mult_r012(position: str, d_margin: float, d_total: float,
+                     use_margin: bool = True, use_total: bool = True,
+                     clip: bool = True) -> float:
+    b_m, b_t = R012_COEF["WR" if position == "WR" else "RB"]
+    x = (b_m * d_margin if use_margin else 0.0) + (b_t * d_total if use_total else 0.0)
+    m = float(np.exp(x))
+    if clip:
+        m = max(R012_CLIP[0], min(R012_CLIP[1], m))
+    return m
+
+
+def r008_net_of_r010(trailing: float, base_r010: float, base_r008: float) -> float:
+    """W11: R-008 subtracts only what R-010 has not already removed.
+
+    R-010 shrinks the trailing mean toward season/prior rates, which are
+    mostly teammate-present games, so when it moved the base DOWN it has
+    already undone part of the "teammate was out" inflation that R-008
+    deflates for. Stacking both removes the same carries twice (Woody
+    Marks, W10: 18.5 -> 14.8 -> 10.64). When R-010 moved the base up, this
+    equals the plain stack."""
+    tr, r10, r8 = float(trailing or 0), float(base_r010 or 0), float(base_r008 or 0)
+    d = max(0.0, r10 - r8)
+    already = max(0.0, tr - r10)
+    return round(max(0.0, r10 - max(0.0, d - already)), 2)

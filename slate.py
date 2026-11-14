@@ -263,10 +263,16 @@ def main():
                     base_rec_r010, base_car_r010,
                     float(pl.get("rec", 0.0) or 0),
                     float(pl.get("car", 0.0) or 0))
-                base_rec_r008 = defl["base_rec"]
-                base_car_r008 = defl["base_car"]
+                # W11: R-008 net of R-010 — deflate only what R-010 hasn't
+                # already removed from the trailing mean.
+                base_rec_r008 = D.r008_net_of_r010(elev["base_rec"], base_rec_r010, defl["base_rec"])
+                base_car_r008 = D.r008_net_of_r010(elev["base_car"], base_car_r010, defl["base_car"])
                 r008_fires = defl["fires"]
                 r008_notes = defl["notes"]
+                if r008_fires and (abs(base_rec_r008 - defl["base_rec"]) > 0.005
+                                   or abs(base_car_r008 - defl["base_car"]) > 0.005):
+                    r008_notes += (f" (net of R-010: rec {defl['base_rec']:.2f}->{base_rec_r008:.2f}, "
+                                   f"car {defl['base_car']:.2f}->{base_car_r008:.2f})")
                 is_home = entry["game"].split(" @ ")[1] == team
                 return {"game": entry["game"], "game_date": entry["date"],
                         "kickoff": entry["kickoff"],

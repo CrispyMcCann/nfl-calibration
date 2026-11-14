@@ -729,7 +729,73 @@ prior doesn't deliver.
 
 ---
 
-## Week 10 — the current strategy
+## Mid-Week 10 (W10b) — what changed and why (shipped 2026-11-14)
+
+**Trigger.** Woody Marks (W10, HOU @ CLE, core_rush over 16.5) came out
+at expected 10.64 carries from a trailing mean of 18.5. R-010cap took
+18.5 → 14.8 (shrinking toward season/prior rates, mostly games *with*
+David Montgomery), then R-008 subtracted again for Montgomery's return
+(−0.6 × 10.4 × 0.67 = −4.16). The same "teammate was out" inflation was
+removed twice. R-008's rationale assumed the base it deflates is
+"mostly teammate-out games," which held for R-006 but not for R-010.
+The W9/W10 backtests never tested R-010 *with* R-008: the shipped
+variants (`w9`, `sigma_cap20`) used the R-010 base with no R-008.
+
+**Review of the whole W10 model (2026-11-14)** found two more issues:
+the `× pace/60` multiplier counts pace twice (the base was already
+produced at the team's pace; on 2023–2025 it raises MSE, and the slope
+of actual/base on pace is −0.61 RB / −0.39 WR), and σ ∝ base is wider
+than the observed residual spread (RB residual SD 5.3–6.2 at every base
+level). Full analysis and numbers: `plans/R-012-game-script.md`.
+
+**Backtest, 2023–2025, vs live W10 (`validate.py --mode brier`, Tables 9–10):**
+
+| variant | 2023 | 2024 | 2025 | verdict |
+|---|---|---|---|---|
+| R-011 alone (R-008 net of R-010) | +0.0005 | −0.0006 | +0.0021 | fails |
+| **R-011 + R-013 (drop pace)** | **+0.0020** | **+0.0020** | **+0.0054** | **ships** (worst +0.0020, mean +0.0031) |
+| fixed σ floors | −0.0015 | −0.0008 | −0.0061 | fails; σ stays 0.70/0.75 |
+| R-012 game script on top (B1) | +0.0024 | +0.0021 | +0.0049 | fails declared grid (adds +0.0004/+0.0001/−0.0005) |
+
+Caveat for the write-up: the shipped stack is positive in every season,
+but its mean clears the +0.003 bar only with 2025; on 2023–2024 alone
+the mean is +0.0020. It shipped as the plan's pre-declared week 10
+fallback.
+
+**What did not ship:** R-012 (spread / implied total). Coefficients fit
+on 2019–2022 (`tools/fit_r012.py`): only the RB margin term survived the
+sign/CI rule (+0.0069 per point of change in expected margin, ≈ ±4.5%
+carries per SD); WR receptions show no detectable game-script effect.
+On top of either stack it adds nothing measurable. Recorded as a dead
+end (R-012 below); the data functions stay in `nflcal/data.py` and the
+UI/calc.py read an optional `script_mult` (absent → 1.0), so it is
+inert unless the slate emits it.
+
+**Rows affected.** Week 10 rows logged before 2026-11-14 15:50 ET (the
+4 TNF props and Saturday sitting 1, 8 props, `ff07633`) keep
+`W10-R005c-R010cap`. Every week 10 prop logged after this ship carries
+`W10b-R005c-R010cap-R011-R013`. No logged row was re-run.
+
+## Week 10b — the current strategy
+
+**Version tag:** `W10b-R005c-R010cap-R011-R013`.
+
+```
+  R-003b (base elevation)    unchanged
+  R-010 + R-010cap           unchanged
+  R-008 (backup-return)      unchanged deflation amount, but
+  R-011 (net of R-010)  NEW  R-008 subtracts only what R-010 has not already
+                             removed from the trailing mean:
+                               base = r010 − max(0, d_r008 − max(0, trailing − r010))
+                             (= plain stack when R-010 moved the base up)
+  R-002 (matchup_adjust)     unchanged
+  formula               NEW  expected = base_r008 × script_mult + matchup_adjust
+                             (R-013: no pace multiplier; script_mult = 1.0
+                             because R-012 did not ship)
+  R-005c σ                   unchanged: max(SIGMA, base × 0.70 RB / 0.75 WR)
+```
+
+## Week 10 — superseded strategy (rows logged before 2026-11-14 15:50 ET)
 
 **Version tag:** `W10-R005c-R010cap`. Rows logged from Week 10
 forward carry this in `methodology_version`. Weeks 3–9 keep their
@@ -1465,6 +1531,53 @@ see:         "Between Week 9 and Week 10" entry above for the full
 ### Placeholder format for future rules:
 
 ```
+### R-011 — R-008 net of R-010  (added 2026-11-14, active W10b)
+
+```
+condition:   R-008 fires (unchanged trigger).
+effect:      base = r010 − max(0, d_r008 − max(0, trailing − r010)),
+             where d_r008 is R-008's deflation and trailing is the
+             R-003-elevated trailing mean (R-010's input).
+reasoning:   R-010 pulls the trailing mean toward season/prior rates,
+             which are mostly teammate-present games, so it has already
+             removed part of the inflation R-008 targets. Woody Marks W10:
+             10.64 → 14.34.
+backtest:    alone fails (worst −0.0006, mean +0.0007); shipped only in
+             combination with R-013 (worst +0.0020, mean +0.0031).
+code:        nflcal/data.py r008_net_of_r010(); slate.py after deflation_r008.
+```
+
+### R-012 — game-script multiplier (spread / implied total)  (tested 2026-11-14, **not shipped — dead end**)
+
+```
+model:       script_mult = exp(b_margin·Δmargin + b_total·Δtotal), clipped
+             [0.85, 1.15]; Δ = this game's expected margin / implied team
+             total minus the mean over the games that built the base.
+fit:         2019–2022 only (tools/fit_r012.py). Kept: RB b_margin +0.0069
+             [+0.0015, +0.0117]. Zeroed (wrong sign or CI spans 0): RB
+             b_total, WR b_margin, WR b_total.
+backtest:    declared 8-cell grid (plans/R-012-game-script.md), picked on
+             2023–24, confirm on 2025: no cell passes; on top of R-011+R-013
+             it adds +0.0004 / +0.0001 / −0.0005.
+status:      inert. nflcal/data.py keeps script_context()/script_mult_r012();
+             the formula reads script_mult if the slate ever emits it.
+```
+
+### R-013 — drop the pace multiplier  (added 2026-11-14, active W10b)
+
+```
+effect:      expected = base × script_mult + matchup_adjust (was
+             base × pace/60 × usage_factor + matchup_adjust). `pace` stays
+             in the queue and CSV as a control column.
+reasoning:   the base is the player's own volume, already produced at his
+             team's pace; multiplying by pace/60 counts it twice. 2023–2025:
+             MSE rises with the multiplier (RB 34.0 → 35.9, WR 6.08 → 6.25);
+             slope of actual/base on pace is −0.61 RB / −0.39 WR.
+backtest:    with R-011: worst +0.0020, mean +0.0031, positive every season.
+code:        ui.html estimateProb; tools/calc.py one_prop passes pace=60
+             (compute_myp keeps its pace argument for old backtest variants).
+```
+
 ### R-NNN  (added week N)
 condition:   e.g., "def_rank_opp >= 25 AND deficit > 6"
 applies to:  rushing | receiving | both

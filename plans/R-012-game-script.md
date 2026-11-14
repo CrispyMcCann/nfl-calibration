@@ -266,3 +266,35 @@ Reading:
    UI's expected = base (no pace) + R-002.
 5. Republish the UI; confirm the live page equals `ui.html`.
 6. Commit, push; the owner reloads the slate and finishes the queue.
+
+## Outcome (2026-11-14, same day)
+
+**R-012 fit (2019–2022, `tools/fit_r012.py`, game-week bootstrap 300):**
+
+| | b_margin [95% CI] | b_total [95% CI] |
+|---|---|---|
+| RB carries (n=2309) | **+0.0069 [+0.0015, +0.0117]**, kept | −0.0054 [−0.0153, +0.0044], zeroed |
+| WR receptions (n=4248) | −0.0002 [−0.0052, +0.0059], zeroed | +0.0037 [−0.0080, +0.0142], zeroed |
+
+So "total only" = "none" and "both" = "margin only" in the grid.
+
+**Declared grid (Table 10, deltas vs live W10):**
+
+| | 2023 | 2024 | 2025 |
+|---|---|---|---|
+| A1 / A3 | +0.0003 | +0.0000 | −0.0005 |
+| A2 | −0.0000 | −0.0000 | −0.0000 |
+| B0 | +0.0020 | +0.0020 | +0.0054 |
+| B1 / B3 | +0.0024 | +0.0021 | +0.0049 |
+| B2 | +0.0020 | +0.0020 | +0.0054 |
+
+No cell passes the strict bar on 2023–2024, so **nothing from the grid
+ships** under the declared protocol. R-012 on top of B0 adds
++0.0004 / +0.0001 / −0.0005: noise. Recorded as a dead end
+(METHODOLOGY.md R-012).
+
+**Shipped instead:** B0, the plan's pre-declared week 10 fallback =
+R-011 (R-008 net of R-010) + R-013 (no pace), as
+`W10b-R005c-R010cap-R011-R013`. B0 is positive in every season, but its
+mean clears +0.003 only with 2025 (2023–24 mean +0.0020). The write-up
+must say so.

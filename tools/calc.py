@@ -32,7 +32,7 @@ import math
 import sys
 
 # Constants — must match METHODOLOGY.md Week 10 AND ui.html's METHODOLOGY block.
-METH_VER = "W10-R005c-R010cap"
+METH_VER = "W10b-R005c-R010cap-R011-R013"
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
 SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}  # retired W9 (R-001 dropped)
 SHRINK_FACTOR = 0.5                                   # retired W9 (R-001 dropped)
@@ -181,8 +181,11 @@ def one_prop() -> None:
                "base_car_r008 for rushing, base_rec_r008 for receiving)", float)
     pos = ask("position (RB/WR for sigma scaling)", str.upper,
               choices=("RB", "WR"))
-    pace = ask("pace (team plays/game from queue)", float)
-    usage_factor = ask("usage_factor", float, default=1.0)
+    # W11: pace no longer enters the live formula (backtest w11_nopace);
+    # compute_myp keeps its pace argument so old backtest variants still
+    # reproduce, and the live path passes the neutral 60.
+    pace = 60.0
+    usage_factor = ask("script_mult (R-012, from queue; 1.0 if absent)", float, default=1.0)
     pass_rank_opp = ask("pass_def_rank_opp (1=best D, blank if unknown)",
                         _opt_int, default=None)
     rush_rank_opp = ask("rush_def_rank_opp (1=best D, blank if unknown)",
@@ -217,7 +220,7 @@ def one_prop() -> None:
     else:
         r002_tag = "  R-002 skipped → matchup_adjust = 0.00"
     print(r002_tag)
-    print(f"  raw_expected = {base:.2f} × ({pace:.1f}/60) × {usage_factor:.2f}"
+    print(f"  raw_expected = {base:.2f} × {usage_factor:.3f}"
           f" + {matchup_adjust:+.2f}  =  {raw_expected:.3f}")
     print(f"  deviation    = {deviation:+.3f}   "
           f"(threshold ±{threshold:.1f} for {market})")
