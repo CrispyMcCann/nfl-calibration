@@ -242,17 +242,24 @@ def _prior_full_season(season: int, player: str, market: str) -> tuple[float | N
 def _r010_ebayes_base(trailing_mean: float, trailing_n: int,
                      season_mean: float | None, season_n: int,
                      prior_mean: float | None, prior_n: int,
-                     positional_mean: float, position: str) -> float:
+                     positional_mean: float, position: str,
+                     use_positional_prior: bool = False) -> float:
     """R-010 empirical-Bayes base. See METHODOLOGY.md deferred-candidates
     (via memory). The idea: shrink the player's rate toward prior-season
     (or positional fallback) with pseudo-count = Efron-Morris halflife;
-    then blend with trailing-3 for recency weight.
+    then blend with trailing-3 for recency weight. R-014 (W11): the
+    caller forces the positional prior when a role change since last
+    season makes last year's rate the wrong anchor.
     """
     k = R010_HALFLIFE_RB if position == "RB" else R010_HALFLIFE_WR
 
     # Pick the prior: previous-season average when we have ≥5 games on
     # record; otherwise fall back to the positional mean (rookies, new).
-    prior = prior_mean if (prior_mean is not None and prior_n >= 5) else positional_mean
+    # R-014 override: force positional prior when role has changed.
+    if use_positional_prior:
+        prior = positional_mean
+    else:
+        prior = prior_mean if (prior_mean is not None and prior_n >= 5) else positional_mean
 
     # Shrink current-season observation toward the prior.
     if season_n > 0 and prior is not None:
@@ -480,6 +487,7 @@ def _run_brier_mode(a) -> None:
     print("between variants on the same proxy, not levels.\n")
 
     agg_rows = []
+    all_dfs = []
     for season in seasons:
         print(f"=== season {season} ===")
         ps = D._player_stats(season)
@@ -618,6 +626,43 @@ def _run_brier_mode(a) -> None:
                     base_w11_nostack = max(0.0, base_cap20_w11
                                            - max(0.0, d_r008 - already_removed))
                     sc_w10 = W10_SIGMA_SCALE_RB_HI if pos == "RB" else W10_SIGMA_SCALE_WR_HI
+
+                    # R-014 (W11): role-change prior. When current-season rate
+                    # differs from prior-season rate by at least `ratio` in
+                    # either direction (≥4 current games, ≥5 prior games), swap
+                    # R-010's prior from last-year mean to the positional
+                    # prior; otherwise reproduce w11_nopace exactly.
+                    def _r014_variant(ratio: float) -> tuple[float, bool]:
+                        fired = False
+                        if (prior_mean is not None and prior_n >= 5
+                                and prior_mean > 0
+                                and season_n_actual >= 4
+                                and season_mean_actual is not None):
+                            rr = float(season_mean_actual) / float(prior_mean)
+                            if rr >= ratio or rr <= (1.0 / ratio):
+                                fired = True
+                        if fired:
+                            base_r010_r014 = _r010_ebayes_base(
+                                trailing_mean, pl_gms,
+                                season_mean_actual, season_n_actual,
+                                prior_mean, prior_n,
+                                positional_mean, pos,
+                                use_positional_prior=True)
+                        else:
+                            base_r010_r014 = base_r010
+                        base_cap_r014 = _r010_capped(base_r010_r014, trailing_mean, 0.20)
+                        already_r014 = max(0.0, trailing_mean - base_cap_r014)
+                        base_r014 = max(0.0, base_cap_r014
+                                        - max(0.0, d_r008 - already_r014))
+                        myp = compute_myp(market, side, base_r014, 60.0, line,
+                                          pass_rank_opp=pass_rk, rush_rank_opp=rush_rk,
+                                          apply_r002=True, apply_r001=False,
+                                          sigma_scale=sc_w10)["my_p"]
+                        return myp, fired
+                    myp_r014_13, fired_13 = _r014_variant(1.3)
+                    myp_r014_15, fired_15 = _r014_variant(1.5)
+                    myp_r014_20, fired_20 = _r014_variant(2.0)
+
                     # R-012 grid (plans/R-012-game-script.md). Script multiplier
                     # goes in usage_factor, so sigma stays tied to the base.
                     sctx = D.script_context(season, team, wk, pl["name"])
@@ -791,6 +836,12 @@ def _run_brier_mode(a) -> None:
                                                      sigma_scale=0.0)["my_p"],
                         # R-012 declared grid: A = live W10, B = w11_nopace.
                         **{f"grid_{st}{c}": _grid(st, c) for st in "AB" for c in "0123"},
+                        # R-014 declared variants (plans/R-014-role-change-prior.md):
+                        # swap R-010's prior from last-year to positional when a
+                        # role change is detected. Base is w11_nopace's chain.
+                        "r014_r13": myp_r014_13,
+                        "r014_r15": myp_r014_15,
+                        "r014_r20": myp_r014_20,
                         # W10 share-model variants.
                         "share_model":   _share_myp(10, apply_ebayes=False,
                                                      apply_roster=False, opp_mag=0.05),
@@ -816,6 +867,9 @@ def _run_brier_mode(a) -> None:
                                  "line": line, "actual": actual, "y": y,
                                  "r003_fired": elev["fires"],
                                  "r008_fired": r008_fires,
+                                 "r014_fired_13": fired_13,
+                                 "r014_fired_15": fired_15,
+                                 "r014_fired_20": fired_20,
                                  "gms": pl_gms, "small_n": pl_gms < 3,
                                  **{f"myp_{v}": variants_myp[v] for v in variants_myp}})
 
@@ -841,10 +895,13 @@ def _run_brier_mode(a) -> None:
                         "sigma_cap20", "sigma_cap30", "w10_all",
                         "w10_live", "w11_nostack", "w11_nopace",
                         "w11_flatsig", "w11_nopace_flatsig",
-                        *[f"grid_{st}{c}" for st in "AB" for c in "0123"])
+                        *[f"grid_{st}{c}" for st in "AB" for c in "0123"],
+                        "r014_r13", "r014_r15", "r014_r20")
         for v in all_variants:
             b = ((df[f"myp_{v}"] - df.y) ** 2).mean()
             agg_rows.append({"season": season, "variant": v, "n": len(df), "brier": b})
+        df["season"] = season
+        all_dfs.append(df)
 
         r003_hits = df[df.r003_fired]
         if len(r003_hits):
@@ -888,7 +945,8 @@ def _run_brier_mode(a) -> None:
                     "sigma_cap20", "sigma_cap30", "w10_all",
                     "w10_live", "w11_nostack", "w11_nopace",
                     "w11_flatsig", "w11_nopace_flatsig",
-                    *[f"grid_{st}{c}" for st in "AB" for c in "0123"]]
+                    *[f"grid_{st}{c}" for st in "AB" for c in "0123"],
+                    "r014_r13", "r014_r15", "r014_r20"]
     out = pd.DataFrame(agg_rows).pivot(index="season", columns="variant", values="brier")
     out = out[all_variants]
     print("Brier per variant per season (lower is better)")
@@ -1025,6 +1083,50 @@ def _run_brier_mode(a) -> None:
         print(f"\n  winner on 2023-24: {win}   2025 delta {conf:+.4f}  →  {verdict}")
     else:
         print("\n  no cell passes on 2023-24 — nothing from the grid ships")
+    print()
+
+    print("Table 11 — R-014 DECLARED VARIANTS vs w11_nopace (live W10b base).")
+    print("Protocol (plans/R-014-role-change-prior.md): pick on 2023-2024 only,")
+    print("bar = worst-season delta ≥ -0.0001 AND mean > 0; then confirm on 2025")
+    print("(2025 delta ≥ -0.0001) or nothing ships. Looser than W10's bar because")
+    print("R-014 fires on a minority of props and averaging dilutes any subset rule.")
+    r14_cols = ["r014_r13", "r014_r15", "r014_r20"]
+    dr14 = -out[r14_cols].sub(out["w11_nopace"], axis=0)
+    print(dr14.to_string(float_format=lambda v: f"{v:+.4f}"))
+    print()
+    sel = [s_ for s_ in (2023, 2024) if s_ in dr14.index]
+    cands14 = []
+    for v in r14_cols:
+        w_ = dr14.loc[sel, v].min(); m_ = dr14.loc[sel, v].mean()
+        ok = (w_ >= -0.0001) and (m_ > 0)
+        print(f"  {v:10s} 2023-24 worst {w_:+.4f} mean {m_:+.4f}  →  {'passes' if ok else 'fails'}")
+        if ok:
+            cands14.append((m_, v))
+    if cands14:
+        win = max(cands14)[1]
+        conf = dr14.loc[2025, win] if 2025 in dr14.index else float("nan")
+        verdict = "SHIP" if conf >= -0.0001 else "FAILS 2025 — nothing ships"
+        print(f"\n  winner on 2023-24: {win}   2025 delta {conf:+.4f}  →  {verdict}")
+    else:
+        print("\n  nothing passes on 2023-24 — R-014 does not ship")
+
+    # Subgroup detail: how often does each variant fire, and on firing props
+    # does it actually help?
+    print("\n  R-014 fire counts and sub-Brier on firing props:")
+    big = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
+    if not big.empty:
+        for r, col, fire_col in (("1.3", "r014_r13", "r014_fired_13"),
+                                  ("1.5", "r014_r15", "r014_fired_15"),
+                                  ("2.0", "r014_r20", "r014_fired_20")):
+            fires = big[big[fire_col] == True]
+            if len(fires):
+                b_live = ((fires["myp_w11_nopace"] - fires.y) ** 2).mean()
+                b_r14  = ((fires[f"myp_{col}"] - fires.y) ** 2).mean()
+                print(f"    r={r}: {len(fires):4d} firing props  "
+                      f"w11_nopace Brier {b_live:.4f}  →  {col} {b_r14:.4f}  "
+                      f"(Δ {b_live - b_r14:+.4f})")
+            else:
+                print(f"    r={r}: 0 firing props")
     print()
 
     print("Table 7 — W10 SHARE MODEL vs current W9 ('w9'). Positive = share")

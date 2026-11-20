@@ -217,16 +217,27 @@ def main():
                     SEASON, pl["name"], "receiving")
                 prior_car_mean, prior_car_n = D.prior_full_season(
                     SEASON, pl["name"], "rushing")
+                # R-014 (W11): check whether the player's role has changed
+                # since last season (current rate differs from prior rate by
+                # at least R014_RATIO in either direction). If so, force the
+                # positional prior in R-010 so last year's smaller role
+                # doesn't drag the base down. Market-specific per plan:
+                # carries for RB, receptions for WR.
+                r014_market = "rushing" if pos == "RB" else "receiving"
+                r014_fires = D.role_changed(SEASON, pl["name"], week - 1,
+                                             r014_market, D.R014_RATIO)
                 base_rec_r010 = round(D.ebayes_base(
                     elev["base_rec"], pl_gms,
                     sa_rec, season_n_rec,
                     prior_rec_mean, prior_rec_n,
-                    pos), 2)
+                    pos,
+                    use_positional_prior=r014_fires and r014_market == "receiving"), 2)
                 base_car_r010 = round(D.ebayes_base(
                     elev["base_car"], pl_gms,
                     sa_car, season_n_car,
                     prior_car_mean, prior_car_n,
-                    pos), 2)
+                    pos,
+                    use_positional_prior=r014_fires and r014_market == "rushing"), 2)
                 # Fire-flag: whether the shrinkage moved the base meaningfully
                 # (>5% change from R-003 output). Rookie-fallback-only also fires.
                 def _r010_fired(before: float, after: float) -> bool:
@@ -236,7 +247,12 @@ def main():
                 r010_fires = (_r010_fired(elev["base_rec"], base_rec_r010)
                               or _r010_fired(elev["base_car"], base_car_r010))
                 if r010_fires:
-                    prior_tag = "prior" if (prior_car_n >= 5 or prior_rec_n >= 5) else "pos-prior"
+                    if r014_fires:
+                        prior_tag = f"pos-prior (role change x{D.R014_RATIO:.1f})"
+                    elif (prior_car_n >= 5 or prior_rec_n >= 5):
+                        prior_tag = "prior"
+                    else:
+                        prior_tag = "pos-prior"
                     # Flag when the ±20% cap actually clipped the ebayes output,
                     # so the audit distinguishes "capped" from clean shrinkage.
                     def _capped_rec() -> bool:

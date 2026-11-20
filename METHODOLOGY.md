@@ -776,7 +776,108 @@ inert unless the slate emits it.
 `W10-R005c-R010cap`. Every week 10 prop logged after this ship carries
 `W10b-R005c-R010cap-R011-R013`. No logged row was re-run.
 
-## Week 10b — the current strategy
+## Between Week 10 and Week 11 — what changed and why (shipped 2026-11-19)
+
+The W10b strategy left R-010's prior as last-year's full-season mean
+for every non-rookie. That treats volume as a stable trait, which
+works for players whose role didn't move. It drags a backup-turned-
+starter toward his old backup workload — Tuten's trailing was
+15.25 car/g (as the starter in all 8 games he played) but R-010
+shrinkage pulled it to 8.30, then R-010cap floored it at 11.2.
+With the positional prior (14.0) instead the base would have been
+~14.2, close to what the player is actually doing. R-010cap was
+binding on 23 of 36 W10 props — the shrinkage was mostly fighting
+the data.
+
+**R-014 — role-change prior** fires when a player's current-season
+rate differs from their prior-season rate by at least **1.3×** in
+either direction (≥4 current games, ≥5 prior games). When it fires,
+R-010's prior swaps to the positional mean (`R010_POSITIONAL_PRIOR_RB
+= 14.0` car/g, `_WR = 5.0` rec/g) — the same fallback R-010 already
+uses for rookies. Nothing else in R-010 changes: same pseudo-count,
+same recency blend, same R-010cap, then R-011/R-008, R-002, R-013, σ.
+
+### Backtest: 2023 + 2024 + 2025 pre-declared protocol
+
+The protocol was pre-declared in `plans/R-014-role-change-prior.md`
+before building: pick among three ratios on 2023+2024 only (bar:
+worst-season Δ ≥ −0.0001 AND mean > 0), then confirm the pick on 2025
+(bar: Δ ≥ −0.0001). Looser than W10's bar because R-014 fires on a
+minority of props and averaging over all props dilutes any subset
+rule. All three variants were coded before seeing any result.
+
+```
+Table 11 — R-014 declared variants vs w11_nopace (= W10b base).
+
+variant   2023      2024      2025
+r014_r13  +0.0020   +0.0001   +0.0001
+r014_r15  +0.0016   +0.0001   +0.0006
+r014_r20  +0.0015   -0.0006   +0.0005
+
+  r014_r13   2023-24 worst +0.0001  mean +0.0010  →  passes
+  r014_r15   2023-24 worst +0.0001  mean +0.0009  →  passes
+  r014_r20   2023-24 worst -0.0006  mean +0.0004  →  fails
+
+  winner on 2023-24: r014_r13   2025 delta +0.0001  →  SHIP
+```
+
+**Sub-Brier on firing props** (the rule's actual job):
+
+```
+  r=1.3:  493 firing props  w11_nopace 0.2206  →  r014_r13 0.2181  (Δ +0.0025)
+  r=1.5:  329 firing props  w11_nopace 0.2128  →  r014_r15 0.2088  (Δ +0.0040)
+  r=2.0:  149 firing props  w11_nopace 0.2003  →  r014_r20 0.1949  (Δ +0.0055)
+```
+
+Stricter thresholds show larger sub-Brier gains on firing props
+(more extreme role changes get more help from the positional prior)
+but fire less often. The pre-declared protocol picks by overall mean
+on 2023+2024, which is `r14_r13` by a hair over `r14_r15`. Both
+confirm on 2025; `r14_r20` fails the worst-season gate on 2024.
+
+**Changes shipped as `W11-R005c-R010cap-R011-R013-R014` on 2026-11-19:**
+
+- **R-014 (new):** `role_changed(season, player, through_week, market,
+  ratio=1.3)` detects role change; `ebayes_base(..., use_positional_
+  prior=True)` forces the positional prior when the slate detects
+  one. The slate's `r010_notes` reads `pos-prior (role change x1.3)`
+  when the rule fires.
+- Composition order, R-005c sigma scale, R-010cap, R-011, R-013
+  unchanged.
+
+**Composition order for W11:**
+
+```
+raw trailing-3
+  → R-003b (elevate for OUT teammate)
+  → R-014 role-change check → R-010 ebayes
+      (positional prior if role changed, else last-year mean)
+  → R-010cap (clip to trailing × [0.80, 1.20])
+  → R-011 (R-008 net of R-010; see W10b entry)
+  → formula: expected = base × 1.0 + R-002 matchup_bump   (R-013: no pace)
+  → R-005c sigma = max(SIGMA_floor, base × SIGMA_SCALE[position])
+```
+
+## Week 11 — the current strategy
+
+**Version tag:** `W11-R005c-R010cap-R011-R013-R014`.
+
+```
+  R-003b (base elevation)    unchanged
+  R-014 role-change check   NEW  if current rate / prior rate is outside
+                                 [1/1.3, 1.3] and player has ≥4 current
+                                 games and ≥5 prior games, swap R-010's
+                                 prior to the positional mean (14.0 RB /
+                                 5.0 WR). Audit: r010_notes reads
+                                 `ebayes[pos-prior (role change x1.3), ...]`.
+  R-010 + R-010cap           unchanged mechanics; prior differs when R-014 fires
+  R-008 → R-011 (net)        unchanged from W10b
+  R-002 (matchup_adjust)     unchanged
+  formula                    unchanged from W10b: expected = base × 1.0 + adj
+  R-005c σ                   unchanged
+```
+
+## Week 10b — superseded strategy (rows logged 2026-11-14 to 2026-11-18)
 
 **Version tag:** `W10b-R005c-R010cap-R011-R013`.
 
@@ -784,12 +885,12 @@ inert unless the slate emits it.
   R-003b (base elevation)    unchanged
   R-010 + R-010cap           unchanged
   R-008 (backup-return)      unchanged deflation amount, but
-  R-011 (net of R-010)  NEW  R-008 subtracts only what R-010 has not already
+  R-011 (net of R-010)       R-008 subtracts only what R-010 has not already
                              removed from the trailing mean:
                                base = r010 − max(0, d_r008 − max(0, trailing − r010))
                              (= plain stack when R-010 moved the base up)
   R-002 (matchup_adjust)     unchanged
-  formula               NEW  expected = base_r008 × script_mult + matchup_adjust
+  formula                    expected = base_r008 × script_mult + matchup_adjust
                              (R-013: no pace multiplier; script_mult = 1.0
                              because R-012 did not ship)
   R-005c σ                   unchanged: max(SIGMA, base × 0.70 RB / 0.75 WR)
@@ -1576,6 +1677,45 @@ reasoning:   the base is the player's own volume, already produced at his
 backtest:    with R-011: worst +0.0020, mean +0.0031, positive every season.
 code:        ui.html estimateProb; tools/calc.py one_prop passes pace=60
              (compute_myp keeps its pace argument for old backtest variants).
+```
+
+### R-014 — role-change prior for R-010  (added 2026-11-19, active Week 11)
+
+```
+condition:   player has ≥4 current-season games AND ≥5 prior-season games
+             AND current_mean / prior_mean is outside [1/1.3, 1.3]
+             (promotion or demotion). Stat is market-specific: carries for
+             RB, receptions for WR.
+applies to:  R-010's choice of prior for the shrinkage (RB & WR both).
+effect:      ebayes_base swaps the prior from last-year full-season mean to
+             the positional mean (R010_POSITIONAL_PRIOR_RB = 14.0 car/g,
+             _WR = 5.0 rec/g). Nothing else in R-010 changes: same
+             pseudo-count (29.5 / 13.5), same recency blend with trailing-3,
+             same R-010cap. Audit: r010_notes reads
+             `ebayes[pos-prior (role change x1.3), ...]`.
+reasoning:   R-010's shrinkage assumes last year's rate is the best anchor
+             for the player's true rate. That is true for players whose
+             role is stable, false for backup-turned-starter or starter-
+             turned-backup moves (Tuten W10: 2025 backup 5.4 car/g, 2026
+             starter 15.3 car/g — R-010 drags to 8.3, floored at 11.2 by
+             R-010cap, vs ~14.2 with the positional prior). R-010cap was
+             binding on 23 of 36 W10 props, which is the shrinkage
+             mostly fighting the data rather than helping.
+backtest:    pre-declared 3-ratio protocol (plans/R-014-role-change-prior.md),
+             picked on 2023+2024, confirmed on 2025. Three variants
+             (r=1.3, 1.5, 2.0), all coded before any result seen.
+             r14_r13: 2023+24 worst +0.0001 mean +0.0010 (passes);
+             r14_r15: 2023+24 worst +0.0001 mean +0.0009 (passes);
+             r14_r20: 2023+24 worst −0.0006 (fails worst-season gate).
+             Mean picks r14_r13; 2025 confirmation +0.0001 → SHIP.
+             Sub-Brier on 493 firing props: w11_nopace 0.2206 → r014_r13
+             0.2181 (Δ +0.0025); larger gains at stricter ratios on fewer
+             firing props.
+code:        nflcal/data.py role_changed() + R014_RATIO = 1.3 +
+             ebayes_base(use_positional_prior=...); slate.py passes the
+             flag per-market and tags r010_notes; ui.html + tools/calc.py
+             METH_VER bump only (no formula change — this is a base change
+             upstream of the formula).
 ```
 
 ### R-NNN  (added week N)

@@ -296,7 +296,7 @@ const nowISO = () => new Date().toISOString();
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
 
-/* === METHODOLOGY :: W10b-R005c-R010cap-R011-R013 ==================
+/* === METHODOLOGY :: W11-R005c-R010cap-R011-R013-R014 ==================
  * SYNC CONTRACT. The weekly probability formula lives in three places
  * that must stay IDENTICAL:
  *   1. METHODOLOGY.md — authoritative statement of the formula
@@ -327,7 +327,7 @@ function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
  * `base` for the formula is base_*_r008 (R-003→R-010→R-010cap→R-008).
  * estimateProb mirrors tools/calc.py.one_prop; erf is A&S 7.1.26.
  * ======================================================================= */
-const METH_VER = "W10b-R005c-R010cap-R011-R013";
+const METH_VER = "W11-R005c-R010cap-R011-R013-R014";
 const SIGMA = { rushing: 5.5, receiving: 2.5 };
 // R-002 constants. Position-specific EPA-allowed rank: 1=best D, 32=worst.
 const MATCHUP_BUMP = { rushing: 1.0, receiving: 0.5 };

@@ -32,7 +32,7 @@ import math
 import sys
 
 # Constants — must match METHODOLOGY.md Week 10 AND ui.html's METHODOLOGY block.
-METH_VER = "W10b-R005c-R010cap-R011-R013"
+METH_VER = "W11-R005c-R010cap-R011-R013-R014"
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
 SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}  # retired W9 (R-001 dropped)
 SHRINK_FACTOR = 0.5                                   # retired W9 (R-001 dropped)

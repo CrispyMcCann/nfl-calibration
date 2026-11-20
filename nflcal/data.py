@@ -518,6 +518,14 @@ R010_POSITIONAL_PRIOR_WR =  5.0   # ditto (rec/g)
 # intent and bounds the swing.
 R010_CAP_PCT = 0.20
 
+# R-014 (W11): role-change prior. When a player's current-season rate
+# differs from prior-season rate by at least R014_RATIO in either
+# direction (≥4 current games, ≥5 prior games), swap R-010's prior
+# from last-year mean to the positional prior. Ratio picked on
+# 2023-2024 backtest (worst +0.0001, mean +0.0010); confirmed on 2025
+# (+0.0001) per plans/R-014-role-change-prior.md.
+R014_RATIO = 1.3
+
 
 @functools.lru_cache(maxsize=4)
 def _prior_season_player_stats(season: int) -> pd.DataFrame:
@@ -544,12 +552,36 @@ def prior_full_season(season: int, player: str,
     return float(col.mean()), int(len(hit))
 
 
+def role_changed(season: int, player: str, through_week: int,
+                  market: str, ratio: float) -> bool:
+    """R-014 (W11): the player's role has changed meaningfully since
+    last season when (a) they have ≥4 current-season games and
+    (b) `current_mean / prior_mean` lies outside `[1/ratio, ratio]`
+    (promotion or demotion). Used by the slate to swap R-010's prior
+    from last-year mean to the positional prior.
+
+    Returns False when prior-season data is too thin (R-010 already
+    uses the positional prior in that case) or when the current-season
+    sample is <4 games. `market` is 'rushing' or 'receiving' — the
+    player's own stat for the market (carries for RB, receptions for
+    WR), with both means through `through_week`."""
+    prior_mean, prior_n = prior_full_season(season, player, market)
+    if prior_mean is None or prior_n < 5 or prior_mean <= 0:
+        return False
+    cur = season_avg(season, player, through_week, market)
+    if cur is None or season_games(season, player, through_week) < 4:
+        return False
+    r = float(cur) / float(prior_mean)
+    return r >= ratio or r <= (1.0 / ratio)
+
+
 def ebayes_base(trailing_mean: float, trailing_n: int,
                  season_mean: float | None, season_n: int,
                  prior_mean: float | None, prior_n: int,
                  position: str,
                  apply_cap: bool = True,
-                 cap_pct: float = R010_CAP_PCT) -> float:
+                 cap_pct: float = R010_CAP_PCT,
+                 use_positional_prior: bool = False) -> float:
     """R-010 empirical-Bayes base: shrink the current-season observation
     toward the prior-season full-year average (or the positional
     fallback for rookies), then blend trailing-3 for recency weight.
@@ -577,8 +609,13 @@ def ebayes_base(trailing_mean: float, trailing_n: int,
 
     # Prior: previous-season full-year when we have ≥5 games of it;
     # otherwise fall back to the positional mean for the depth-rank-1
-    # tier (rookies and brand-new players).
-    prior = prior_mean if (prior_mean is not None and prior_n >= 5) else pos_prior
+    # tier (rookies and brand-new players). R-014 (W11): the caller
+    # may force the positional prior when a role change since last
+    # season makes last year's rate the wrong anchor.
+    if use_positional_prior:
+        prior = pos_prior
+    else:
+        prior = prior_mean if (prior_mean is not None and prior_n >= 5) else pos_prior
 
     # Shrink current-season observation toward the prior.
     if season_n > 0 and season_mean is not None:
