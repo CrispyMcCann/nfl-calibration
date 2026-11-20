@@ -858,6 +858,79 @@ raw trailing-3
   → R-005c sigma = max(SIGMA_floor, base × SIGMA_SCALE[position])
 ```
 
+## R-015 depth-chart primary — investigated and rejected (2026-11-19)
+
+User flagged the W11 HOU TNF miss: slate queued Emari Demercado (base
+12.25 car/g off trailing-3 share) when David Montgomery was the active
+listed lead back. The failure is in `primary_at` — trailing-3 share
+picks the backup when the true lead missed trailing-3 and returns this
+week. Montgomery was depth-1 on the chart with 5 games season-to-date
+at 10.4 car/g, but absent from trailing-3 usage (he was out W8-W10),
+so the depth-chart branch's `snap_pct ≥ 0.4` gate rejected him and the
+composite fallback picked Marks / Demercado.
+
+Pre-declared in `plans/R-015-depth-chart-primary.md` on 2026-11-19
+before any result: swap R-010's prior from "last year" to "positional
+mean" was done by R-014; this swaps the slate's *player selection*
+from trailing-3 share to depth-chart depth-1, with three variants of
+how liberally to synthesize a row when depth-1 missed trailing-3
+entirely.
+
+### Backtest: 2023 + 2024 + 2025 pre-declared protocol
+
+```
+Table 12 — R-015 declared variants vs live trailing_3.
+
+mode           2023      2024      2025
+depth_strict  +0.0159   +0.0168   -0.0078
+depth_safe    +0.0156   +0.0154   -0.0031
+depth_season  +0.0159   +0.0168   -0.0078
+
+  depth_strict   2023-24 worst +0.0159 mean +0.0163  →  passes
+  depth_safe     2023-24 worst +0.0154 mean +0.0155  →  passes
+  depth_season   2023-24 worst +0.0159 mean +0.0163  →  passes
+
+  winner by 2023-24 mean: depth_strict
+  2025 confirm:           -0.0078  →  FAILS 2025 — nothing ships
+```
+
+Sub-Brier on **divergent slots** (where depth-chart picks a different
+player than trailing-3) — shows depth chart working exactly as
+hypothesized:
+
+```
+                divergent   trailing_3   →   depth     Δ
+depth_strict      362        0.2328          0.1997   +0.0331
+depth_safe        307        0.2348          0.1907   +0.0441
+depth_season      362        0.2328          0.1997   +0.0331
+```
+
+The sub-Brier story is clean: on the specific ~20% of slots where
+depth chart and trailing-3 disagree, depth chart dominates by 3-4
+Brier points. The problem is 2025. The strong 2023+2024 signal (+0.016
+mean across all slots) collapses to −0.008 on 2025.
+
+Prime suspect: nflverse changed the depth-chart schema between 2024
+and 2025. Pre-2025 is weekly rows keyed by `season/club_code/week/
+depth_team/position`. 2025+ is daily snapshots keyed by `dt/team/
+pos_abb/pos_rank`. The daily snapshots may lag in-game role changes
+or include preseason context that persists into regular-season weeks.
+Not diagnosed further here; the pre-declared protocol required 2025
+confirmation to be ≥ −0.0001, and that is the ship line.
+
+**Decision:** R-015 is recorded as an honest dead end. Plan file,
+helpers (`primary_at(..., primary_mode=...)`, `_synthesize_player_dict`,
+updated `depth_order` schema branches) and Table 12 harness stay in
+the repo for future investigation — specifically, a 2025-schema-fix
+run with cleaned nflverse snapshots is the obvious next experiment.
+No METH_VER bump; W11 stays live.
+
+If a future ship wants to revisit this: the 2023+2024 signal is
+enormous and consistent — +3 to +4 Brier points on divergent slots is
+nothing like noise. A targeted diagnostic of why 2025 reversed (week-
+by-week, divergent-slot-by-slot) would likely find a specific data
+issue to patch, at which point the pre-declared bar could be rerun.
+
 ## Week 11 — the current strategy
 
 **Version tag:** `W11-R005c-R010cap-R011-R013-R014`.
@@ -1716,6 +1789,50 @@ code:        nflcal/data.py role_changed() + R014_RATIO = 1.3 +
              flag per-market and tags r010_notes; ui.html + tools/calc.py
              METH_VER bump only (no formula change — this is a base change
              upstream of the formula).
+```
+
+### R-015 — depth-chart primary selection  (tested 2026-11-19, **not shipped — dead end**)
+
+```
+condition:   every (team, position) queue slot (RB, WR).
+model:       swap primary_at's player selection from trailing-3 share
+             to the depth-chart depth-1 player. Three pre-declared
+             variants:
+               - depth_strict: always use depth-chart depth-1; synthesize
+                 a trailing row from season-to-date if depth-1 missed
+                 trailing-3.
+               - depth_safe: use depth-chart depth-1 iff that player
+                 has gms >= 1 in trailing-3.
+               - depth_season: use depth-chart depth-1 iff that player
+                 has ≥1 game played season-to-date; synthesize when
+                 absent from trailing-3.
+reasoning:   trailing-3 share picks the backup who filled in when the
+             true lead missed trailing-3 and returns this week (W11
+             Demercado over Montgomery, +"a few of these a week slip
+             through" per user). Depth chart is the team-announced
+             starter, resilient to injury-return misses.
+backtest:    declared 3-variant protocol (plans/R-015-depth-chart-primary.md),
+             picked by 2023-24 mean (bar worst ≥ -0.0001 AND mean > 0),
+             confirm on 2025. All 3 PASS 2023-24 (depth_strict mean
+             +0.0163, depth_safe +0.0155, depth_season +0.0163). 2025
+             reverses: depth_strict -0.0078, depth_safe -0.0031,
+             depth_season -0.0078 — FAILS the 2025 ≥ -0.0001 bar.
+             Sub-Brier on divergent slots across 3 seasons: depth_strict
+             +0.0331 on 362 slots, depth_safe +0.0441 on 307 slots,
+             depth_season +0.0331 on 362 slots — depth chart wins big
+             on slots where the two disagree, but the 2025 aggregate
+             collapses the ship case.
+hypothesis:  nflverse depth-chart schema changed between 2024 and 2025
+             (weekly rows → daily snapshots keyed by `dt/pos_rank`).
+             Daily snapshots may lag in-game role changes or include
+             preseason context that persists into regular-season
+             weeks. Not diagnosed further in the test harness.
+status:      inert. nflcal/data.py keeps primary_at's primary_mode
+             parameter, _synthesize_player_dict helper, and dual-schema
+             depth_order; validate.py keeps the Table 12 harness
+             and r015_rows side table. Live slate stays on
+             primary_mode="trailing_3". If a future ship fixes the 2025
+             data issue, the pre-declared bar can be rerun.
 ```
 
 ### R-NNN  (added week N)

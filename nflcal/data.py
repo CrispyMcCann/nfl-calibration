@@ -314,23 +314,33 @@ def depth_order(season: int, team: str, position: str,
 
 def primary_at(season: int, through_week: int, team: str,
                position: str,
-               exclude_out_week: int | None = None) -> dict | None:
+               exclude_out_week: int | None = None,
+               primary_mode: str = "trailing_3") -> dict | None:
     """Pick the WR1 / RB1 for `team` at `through_week`.
 
-    If `exclude_out_week` is given, players whose `report_status == 'Out'`
-    for that week are dropped from consideration — so a depth-1 WR who
-    is inactive this week yields to the next-eligible player instead of
-    being queued and then R-003-self-elevated.
+    `exclude_out_week`: if given, players whose `report_status == 'Out'`
+    for that week are dropped — so a depth-1 WR who is inactive this
+    week yields to the next-eligible player instead of being queued
+    and then R-003-self-elevated.
 
-    Preference order:
-      1) depth-chart `pos_rank == 1` player, if they appear in trailing-3
-         `usage()` with snap_pct >= 0.4.
-      2) composite 0.6 * snap_pct + 0.4 * share (share is tgt_share for WR,
-         car / team-recent-carries for RB), snap_pct tiebreak.
+    `primary_mode`: how the depth-chart signal is used (R-015 pre-declared
+    variants, plans/R-015-depth-chart-primary.md). Live default is
+    `trailing_3`, which reproduces the W11 behaviour exactly.
+
+      - `trailing_3`: depth-chart depth-1 preferred IFF that player has
+         snap_pct ≥ 0.4 in trailing-3; otherwise composite fallback.
+         (Original W11 and earlier behaviour.)
+      - `depth_strict`: depth-chart depth-1 whenever found in usage,
+         regardless of snap_pct. Fall through only if depth-chart is
+         missing or the depth-1 player has no trailing-3 usage row.
+      - `depth_safe`: depth-chart depth-1 if that player has ≥1 game
+         played in trailing-3 (gms ≥ 1). Otherwise composite fallback.
+      - `depth_season`: depth-chart depth-1 if that player has ≥1
+         game played season-to-date. Otherwise composite fallback.
 
     Returns a dict shaped like the entries slate.py already consumes
-    (`name, pos, tgt, share, rec, car, snap`) plus `depth_team` and `gms`,
-    or None if no qualifying player exists.
+    (`name, pos, tgt, share, rec, car, snap`) plus `depth_team` and
+    `gms`, or None if no qualifying player exists.
     """
     u = usage(season, through_week, team)
     if u.empty:
@@ -355,10 +365,42 @@ def primary_at(season: int, through_week: int, team: str,
         top_name = d_eligible.sort_values("pos_rank").iloc[0]["player_name"]
         top_rank = int(d_eligible.sort_values("pos_rank").iloc[0]["pos_rank"])
         match = u[u.player_display_name == top_name]
+        # R-015 (W12): three variants relax how the depth-1 pick is
+        # accepted. `trailing_3` is the legacy live gate. The other three
+        # synthesize a season-to-date row when depth-1 is absent from
+        # trailing-3 usage (returning starter who missed trailing-3) —
+        # that is the exact case that otherwise falls through to the
+        # composite and picks the backup who filled in.
         if not match.empty:
             r = match.iloc[0]
-            if float(r.snap_pct or 0) >= 0.4:
+            snap_ok = float(r.snap_pct or 0) >= 0.4
+            gms = int(r.gms)
+            if primary_mode == "trailing_3":
+                accept = snap_ok
+            elif primary_mode == "depth_strict":
+                accept = True
+            elif primary_mode == "depth_safe":
+                accept = gms >= 1
+            elif primary_mode == "depth_season":
+                season_n = season_games(season, top_name, through_week)
+                accept = season_n >= 1
+            else:
+                raise ValueError(f"unknown primary_mode: {primary_mode}")
+            if accept:
                 return _player_dict(r, position, depth_team=top_rank)
+        else:
+            # Depth-1 not in trailing-3 usage (e.g., Montgomery W11 HOU).
+            # trailing_3 mode falls through. depth_strict always
+            # synthesizes. depth_season synthesizes iff season_n ≥ 1.
+            # depth_safe requires trailing-3 presence, so it also falls
+            # through here (the player had zero trailing-3 appearances).
+            if primary_mode == "depth_strict":
+                return _synthesize_player_dict(
+                    season, top_name, through_week, position, top_rank)
+            if primary_mode == "depth_season":
+                if season_games(season, top_name, through_week) >= 1:
+                    return _synthesize_player_dict(
+                        season, top_name, through_week, position, top_rank)
 
     u = u.copy()
     if position == "RB":
@@ -388,6 +430,31 @@ def _player_dict(r, position: str, depth_team: int | None) -> dict:
         "snap": round(float(r.snap_pct or 0), 2),
         "depth_team": depth_team,
         "gms": int(r.gms),
+    }
+
+
+def _synthesize_player_dict(season: int, name: str, through_week: int,
+                            position: str, depth_team: int) -> dict:
+    """R-015 (W12): build a player dict for a depth-1 starter who
+    had no games in trailing-3 (missed all 3 trailing-weeks). Uses
+    season-to-date rates as the trailing-3 stand-in. Downstream
+    R-010 ebayes treats `gms=0` as `trailing_n=0`, so the shrinkage
+    composition falls through to the shrunk-season estimate
+    anchored on these season-to-date rates and the prior; R-014's
+    role-change check runs on the same synthesized rates.
+    """
+    rush_sa = season_avg(season, name, through_week, "rushing") or 0.0
+    recv_sa = season_avg(season, name, through_week, "receiving") or 0.0
+    return {
+        "name": name,
+        "pos": position,
+        "tgt": 0.0,                # unknown without game-by-game target rows
+        "share": 0.0,              # ditto
+        "rec": round(float(recv_sa), 1),
+        "car": round(float(rush_sa), 1),
+        "snap": 0.0,               # unknown without weekly-snaps join
+        "depth_team": depth_team,
+        "gms": 0,                  # R-015 synthetic row, no trailing-3 games
     }
 
 

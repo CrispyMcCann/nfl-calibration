@@ -488,6 +488,12 @@ def _run_brier_mode(a) -> None:
 
     agg_rows = []
     all_dfs = []
+    # R-015 (W12) side table: parallel picks under four primary modes.
+    # Rows per (slot, mode) tagged with the mode and the W11-live my_p
+    # (w11_nopace formula + r014_r13 ebayes). Table 12 aggregates by
+    # (season, mode); pre-declared protocol picks a winner on 2023-24
+    # and confirms on 2025.
+    r015_rows = []
     for season in seasons:
         print(f"=== season {season} ===")
         ps = D._player_stats(season)
@@ -873,6 +879,92 @@ def _run_brier_mode(a) -> None:
                                  "gms": pl_gms, "small_n": pl_gms < 3,
                                  **{f"myp_{v}": variants_myp[v] for v in variants_myp}})
 
+                    # R-015 sidecar. For each primary_mode variant,
+                    # re-pick the player and run the W11-live pipeline
+                    # end-to-end on THAT player. The trailing_3 row above
+                    # is the live baseline; the 3 depth_* rows measure
+                    # whether swapping the slate's picker improves Brier.
+                    slot_id = f"{season}-{wk}-{g.game}-{side}-{pos}"
+                    def _w11_live_myp(pl_m):
+                        """Run the live W11 chain (R-003 → R-010 cap → R-011
+                        nostack → formula no pace → R-005c σ) with the R-014
+                        role-change check on the ebayes prior. Returns
+                        (actual, y, myp_live) or None if the player has no
+                        valid stats/line this week."""
+                        name = pl_m["name"]
+                        a_m = _actual_for(ps, name, wk, market)
+                        if a_m is None: return None
+                        line_m = _line_proxy(ps, name, wk - 1, market)
+                        if line_m is None: return None
+                        rec_raw = float(pl_m.get("rec", 0) or 0)
+                        car_raw = float(pl_m.get("car", 0) or 0)
+                        elev_m = D.elevation_r003(season, wk, team, pos,
+                                                  rec_raw, car_raw,
+                                                  exclude_player=name)
+                        base_r003_m = (elev_m["base_car"] if market == "rushing"
+                                       else elev_m["base_rec"])
+                        trailing_m = car_raw if market == "rushing" else rec_raw
+                        gms_m = int(pl_m.get("gms", 0))
+                        pr_mean_m, pr_n_m = _prior_full_season(season, name, market)
+                        _hist = ps[(ps.player_display_name == name) & (ps.week < wk)]
+                        snm = int(len(_hist)); smm = None
+                        if snm:
+                            smm = float((_hist.carries if market == "rushing"
+                                         else _hist.receptions).mean())
+                        # R-014 role-change check
+                        use_pos = False
+                        if (pr_mean_m is not None and pr_n_m >= 5
+                                and pr_mean_m > 0 and snm >= 4 and smm is not None):
+                            r_ratio = float(smm) / float(pr_mean_m)
+                            if r_ratio >= 1.3 or r_ratio <= 1/1.3:
+                                use_pos = True
+                        pos_mean = (R010_POSITIONAL_PRIOR_RB if pos == "RB"
+                                    else R010_POSITIONAL_PRIOR_WR)
+                        b10 = _r010_ebayes_base(trailing_m, gms_m,
+                                                smm, snm, pr_mean_m, pr_n_m,
+                                                pos_mean, pos,
+                                                use_positional_prior=use_pos)
+                        b_cap = _r010_capped(b10, trailing_m, 0.20)
+                        # R-008 deflation on the player's own raw
+                        rec_r008_raw_m, car_r008_raw_m, _, _ = _r008_deflate(
+                            season, wk, team, pos, name,
+                            rec_raw, car_raw, rec_raw, car_raw, ps)
+                        b_r008_only = (car_r008_raw_m if market == "rushing"
+                                       else rec_r008_raw_m)
+                        d_r008_m = max(0.0, trailing_m - b_r008_only)
+                        already = max(0.0, trailing_m - b_cap)
+                        base_live = max(0.0, b_cap
+                                        - max(0.0, d_r008_m - already))
+                        pr_mo = int(ratings.loc[opp_team, "pass_def_rank"]) \
+                            if opp_team in ratings.index else None
+                        rr_mo = int(ratings.loc[opp_team, "rush_def_rank"]) \
+                            if opp_team in ratings.index else None
+                        sc_live = (W10_SIGMA_SCALE_RB_HI if pos == "RB"
+                                   else W10_SIGMA_SCALE_WR_HI)
+                        myp = compute_myp(market, side, base_live, 60.0, line_m,
+                                          pass_rank_opp=pr_mo, rush_rank_opp=rr_mo,
+                                          apply_r002=True, apply_r001=False,
+                                          sigma_scale=sc_live)["my_p"]
+                        over_hit_m = 1 if a_m > line_m else 0
+                        y_m = over_hit_m if side == "over" else (1 - over_hit_m)
+                        return (a_m, y_m, myp)
+                    # Trailing-3 mode: already computed above as `pl`; reuse.
+                    r015_rows.append({"season": season, "week": wk,
+                                      "slot": slot_id, "mode": "trailing_3",
+                                      "player": pl["name"], "y": y,
+                                      "myp": variants_myp["r014_r13"]})
+                    for mode in ("depth_strict", "depth_safe", "depth_season"):
+                        pl_m = D.primary_at(season, wk - 1, team, pos,
+                                            primary_mode=mode)
+                        if pl_m is None: continue
+                        out = _w11_live_myp(pl_m)
+                        if out is None: continue
+                        a_m, y_m, myp_m = out
+                        r015_rows.append({"season": season, "week": wk,
+                                          "slot": slot_id, "mode": mode,
+                                          "player": pl_m["name"], "y": y_m,
+                                          "myp": myp_m})
+
         df = pd.DataFrame(rows)
         if df.empty:
             print(f"  no scorable props across weeks {a.from_week}-{last}")
@@ -1127,6 +1219,68 @@ def _run_brier_mode(a) -> None:
                       f"(Δ {b_live - b_r14:+.4f})")
             else:
                 print(f"    r={r}: 0 firing props")
+    print()
+
+    print("Table 12 — R-015 DECLARED VARIANTS (plans/R-015-depth-chart-primary.md).")
+    print("Depth-chart-based primary selection vs live trailing_3. Protocol: pick a")
+    print("mode on 2023-2024 (bar: worst-season Δ ≥ -0.0001 AND mean > 0), then")
+    print("confirm on 2025 (Δ ≥ -0.0001). Each row is one (slot, mode) pick evaluated")
+    print("under the W11 formula (w11_nopace + r014_r13).")
+    r15 = pd.DataFrame(r015_rows)
+    if r15.empty:
+        print("  no R-015 rows produced — skip")
+    else:
+        # Keep only slots where ALL modes produced a valid pick, so each
+        # mode's season mean is computed over the same slots — otherwise
+        # differing slot sets would bias the comparison.
+        modes = ["trailing_3", "depth_strict", "depth_safe", "depth_season"]
+        slot_mode_count = r15.groupby("slot").mode.nunique()
+        full_slots = set(slot_mode_count[slot_mode_count == len(modes)].index)
+        r15f = r15[r15.slot.isin(full_slots)].copy()
+        r15f["brier"] = (r15f.myp - r15f.y) ** 2
+        tab = (r15f.groupby(["season", "mode"]).brier.mean()
+               .unstack("mode")[modes])
+        print(f"  {len(full_slots)} slots with all 4 modes present; "
+              f"{len(r15) - len(r15f)} rows dropped for unequal coverage")
+        print("\nmean Brier per (season, mode):")
+        print(tab.to_string(float_format=lambda v: f"{v:.4f}"))
+        dr15 = -tab.subtract(tab["trailing_3"], axis=0).drop(columns=["trailing_3"])
+        print("\ndelta vs trailing_3 (positive = R-015 variant better):")
+        print(dr15.to_string(float_format=lambda v: f"{v:+.4f}"))
+        print()
+        sel = [s_ for s_ in (2023, 2024) if s_ in dr15.index]
+        cands = []
+        for v in ("depth_strict", "depth_safe", "depth_season"):
+            w_ = dr15.loc[sel, v].min(); m_ = dr15.loc[sel, v].mean()
+            ok = (w_ >= -0.0001) and (m_ > 0)
+            print(f"  {v:14s} 2023-24 worst {w_:+.4f} mean {m_:+.4f}  →  "
+                  f"{'passes' if ok else 'fails'}")
+            if ok: cands.append((m_, v))
+        if cands:
+            win = max(cands)[1]
+            conf = dr15.loc[2025, win] if 2025 in dr15.index else float("nan")
+            verdict = "SHIP" if conf >= -0.0001 else "FAILS 2025 — nothing ships"
+            print(f"\n  winner on 2023-24: {win}   2025 delta {conf:+.4f}  →  {verdict}")
+        else:
+            print("\n  nothing passes on 2023-24 — R-015 does not ship")
+
+        # Disagreement sub-analysis: how often does each depth mode pick a
+        # different player than trailing_3, and on those divergent slots
+        # does depth-chart actually beat trailing-3?
+        print("\n  R-015 disagreement counts and sub-Brier on divergent slots:")
+        for v in ("depth_strict", "depth_safe", "depth_season"):
+            t3 = r15f[r15f["mode"] == "trailing_3"].set_index("slot")
+            dm = r15f[r15f["mode"] == v].set_index("slot")
+            common = t3.index.intersection(dm.index)
+            diverg = [s for s in common if t3.loc[s, "player"] != dm.loc[s, "player"]]
+            if not diverg:
+                print(f"    {v}: 0 divergent slots")
+                continue
+            t3_b = ((t3.loc[diverg, "myp"] - t3.loc[diverg, "y"]) ** 2).mean()
+            dm_b = ((dm.loc[diverg, "myp"] - dm.loc[diverg, "y"]) ** 2).mean()
+            print(f"    {v:14s}: {len(diverg):4d} divergent slots  "
+                  f"trailing_3 {t3_b:.4f}  →  {v} {dm_b:.4f}  "
+                  f"(Δ {t3_b - dm_b:+.4f})")
     print()
 
     print("Table 7 — W10 SHARE MODEL vs current W9 ('w9'). Positive = share")
