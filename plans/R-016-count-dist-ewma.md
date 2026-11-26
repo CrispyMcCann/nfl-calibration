@@ -99,3 +99,46 @@ If nothing passes, nothing ships and W11 runs on.
 - NegBin in JS uses the pmf recursion
   `p0 = q^r`, `p_k = p_{k-1} · (k-1+r)/k · (1-q)`, `q = r/(r+μ)`,
   so no gamma function is needed.
+
+## 2026-11-26 — owner override of the ship rule
+
+Written before the fair backtest finished. The owner decided to replace
+the methodology for week 12 regardless of whether the ship rule above
+passes: "lets go through our full methodology, tear down the faulty
+parts, and replace with a new researched methodology … I'm the one
+writing the rules."
+
+Consequences for the write-up:
+
+- The W12 methodology is **chosen by evidence** (the R-016 backtest
+  tables) but **not gated by a pre-declared test**. The ship rule
+  above is reported as passed or failed, but it did not decide.
+- The W12 version band therefore can't be presented as a
+  pre-registered improvement. It is a new method, scored prospectively
+  from week 12 on, like every earlier version change.
+- Unaffected: the selection filter, prop set, analysis plan, and every
+  logged row (CLAUDE.md rules 1-5). Only how `my_p` is formed changes.
+
+## 2026-11-26 — results and what shipped
+
+Full tables in METHODOLOGY.md, "Between Week 11 and Week 12". Summary:
+
+- **Pre-declared ship rule (look-ahead data, as written above):** the
+  pre-declared combo M1* + D1 beat M0 + D0 in all three seasons
+  (+0.0019 / +0.0042 / +0.0053), and so did D1 alone (+0.0042 /
+  +0.0016 / +0.0024). The rule passed. The owner override above means
+  it did not decide.
+- **Departures from the plan, made after seeing results, disclosed:**
+  1. Added `--pregame-info` (no game-day inactives) after finding the
+     look-ahead in `_effectively_out` / R-008. Final choices use it.
+  2. Judged by pooled 2023-25 with game-clustered CIs instead of the
+     train/hold split. The split was too noisy to separate rules.
+  3. Table 1's selection dropped M0 by construction. For RB, M0 beat
+     every M1 variant on train. The audit found plain EWMA h=3 ties
+     the full chain for RB, so EWMA shipped for RB on simplicity and
+     calibration, not on a Brier win.
+  4. R-002 removal was not in the plan as a standalone test; the
+     ablation showed no signal for it in any configuration.
+- **Shipped as W12-R016:** RB EWMA h=3, no prior; WR EWMA h=3 + prior
+  3 pseudo-games; NegBin size 12.5 RB / 26.7 WR (fit 2023-25 pregame);
+  no R-002, R-003, R-008, R-010, R-010cap, R-011, R-014, R-005c.

@@ -1324,12 +1324,308 @@ def _run_brier_mode(a) -> None:
 
 # ------------- entry point --------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# R-016 (plans/R-016-count-dist-ewma.md): count distribution + EWMA base.
+# Baseline M0 is the live W11 chain built with the SAME nflcal.data calls
+# slate.py makes (R-003 → R-010/R-014 → cap → R-008 net of R-010), not the
+# R-015 sidecar's re-implementation. Scored over seven half-point lines at
+# proxy offsets −3…+3 so a too-wide sigma can't hide next to the median.
+# ---------------------------------------------------------------------------
+R016_OFFSETS = (-3, -2, -1, 0, 1, 2, 3)
+R016_SIGMA_FLOOR = {"RB": 5.5, "WR": 2.5}
+R016_SIGMA_SCALE = {"RB": 0.70, "WR": 0.75}
+
+
+def _ewma(vals, hl: float) -> float | None:
+    """Exponentially weighted mean, newest last; weight halves every hl games."""
+    v = np.asarray(vals, dtype=float)
+    if len(v) == 0:
+        return None
+    w = 0.5 ** (np.arange(len(v))[::-1] / hl)
+    return float((w * v).sum() / w.sum())
+
+
+def _r016_live_base(season, wk, team, pos, pl, market):
+    """Live W11 base, exactly as slate.stub() composes it, plus one
+    ablation per rule (each drops exactly one rule from the chain).
+    Returns a dict of bases for `market`."""
+    mk = "car" if market == "rushing" else "rec"
+    raw = {"rec": float(pl.get("rec", 0.0) or 0), "car": float(pl.get("car", 0.0) or 0)}
+    pl_gms = int(pl.get("gms") or 0)
+    n_season = D.season_games(season, pl["name"], wk - 1)
+    sa = D.season_avg(season, pl["name"], wk - 1, market)
+    pr, pr_n = D.prior_full_season(season, pl["name"], market)
+    mk14 = "rushing" if pos == "RB" else "receiving"
+    r014 = D.role_changed(season, pl["name"], wk - 1, mk14, D.R014_RATIO) and mk14 == market
+
+    def chain(r003=True, r010=True, cap=True, r014_on=True, r008=True):
+        if r003:
+            elev = D.elevation_r003(season, wk, team, pos, raw["rec"], raw["car"],
+                                    exclude_player=pl["name"])
+            e = {"rec": float(elev["base_rec"]), "car": float(elev["base_car"])}
+        else:
+            e = dict(raw)
+        if r010:
+            b10 = round(D.ebayes_base(e[mk], pl_gms, sa, n_season, pr, pr_n, pos,
+                                      apply_cap=cap,
+                                      use_positional_prior=r014 and r014_on), 2)
+        else:
+            b10 = e[mk]
+        if not r008:
+            return float(b10)
+        b10s = {"rec": b10 if mk == "rec" else e["rec"], "car": b10 if mk == "car" else e["car"]}
+        defl = D.deflation_r008(season, wk, team, pos, pl["name"], b10s["rec"], b10s["car"],
+                                raw["rec"], raw["car"])
+        return float(D.r008_net_of_r010(e[mk], b10, defl[f"base_{mk}"]))
+
+    out = {"base_live": chain(), "abl_no_r003": chain(r003=False),
+           "abl_no_r010": chain(r010=False), "abl_no_cap": chain(cap=False),
+           "abl_no_r014": chain(r014_on=False), "abl_no_r008": chain(r008=False),
+           "raw_t3": raw[mk]}
+    elev = D.elevation_r003(season, wk, team, pos, raw["rec"], raw["car"],
+                            exclude_player=pl["name"])
+    defl_raw = D.deflation_r008(season, wk, team, pos, pl["name"], raw["rec"], raw["car"],
+                                raw["rec"], raw["car"])
+    out["d003"] = float(elev[f"base_{mk}"]) - raw[mk]
+    out["d008"] = raw[mk] - float(defl_raw[f"base_{mk}"])
+    return out
+
+
+def _r016_collect(seasons, from_week) -> pd.DataFrame:
+    from tools.calc import matchup_adjust_r002
+    rows = []
+    for season in seasons:
+        ps = D._player_stats(season)
+        if "season_type" in ps:
+            ps = ps[ps.season_type == "REG"]
+        sch = nfl.load_schedules([season]).to_pandas()
+        done = sch[sch.result.notna() & (sch.game_type == "REG")]
+        if done.empty:
+            continue
+        last = int(done.week.max())
+        for wk in range(max(from_week, 4), last + 1):
+            try:
+                s = build_slate(season, wk)
+            except Exception:
+                continue
+            if s.empty:
+                continue
+            ratings = D.defense_ratings(season, through_week=wk - 1)
+            for _, g in s.iterrows():
+                for role, team, pos, market, side in (
+                    ("leading",  g.leading,  "RB", "rushing",   "over"),
+                    ("trailing", g.trailing, "RB", "rushing",   "under"),
+                    ("trailing", g.trailing, "WR", "receiving", "over"),
+                    ("leading",  g.leading,  "WR", "receiving", "under"),
+                ):
+                    pl = D.primary_at(season, wk - 1, team, pos)
+                    if pl is None:
+                        continue
+                    actual = _actual_for(ps, pl["name"], wk, market)
+                    line = _line_proxy(ps, pl["name"], wk - 1, market)
+                    if actual is None or line is None:
+                        continue
+                    opp = g.leading if role == "trailing" else g.trailing
+                    prk = int(ratings.loc[opp, "pass_def_rank"]) if opp in ratings.index else None
+                    rrk = int(ratings.loc[opp, "rush_def_rank"]) if opp in ratings.index else None
+                    adj = matchup_adjust_r002(market, prk, rrk)
+                    lb = _r016_live_base(season, wk, team, pos, pl, market)
+                    col = "carries" if market == "rushing" else "receptions"
+                    hist = ps[(ps.player_display_name == pl["name"]) & (ps.week < wk)] \
+                        .sort_values("week")[col].fillna(0).values
+                    pr_mean, pr_n = D.prior_full_season(season, pl["name"], market)
+                    rows.append({"season": season, "week": wk, "game": g.game,
+                                 "player": pl["name"], "pos": pos, "market": market,
+                                 "side": side, "line": line, "actual": float(actual),
+                                 "adj_r002": adj, **lb,
+                                 "n_hist": len(hist),
+                                 "ew3": _ewma(hist, 3), "ew4": _ewma(hist, 4),
+                                 "prior": pr_mean if (pr_mean is not None and pr_n >= 5) else np.nan})
+        print(f"  {season}: {sum(r['season'] == season for r in rows)} slots")
+    return pd.DataFrame(rows)
+
+
+def _r016_mean(df: pd.DataFrame, cand: str) -> pd.Series:
+    """Expected value (incl. R-002 unless the id ends in '-r002off')."""
+    r002 = not cand.endswith("-r002off")
+    c = cand.replace("-r002off", "")
+    if c == "M0":
+        base = df.base_live
+    else:  # M1-h{3,4}-k{0,3}-inj{0,1}
+        _, h, k, inj = c.split("-")
+        ew = df[f"ew{h[1:]}"].fillna(df.base_live)
+        k = float(k[1:])
+        n = df.n_hist.astype(float)
+        has_p = df.prior.notna() & (k > 0)
+        base = ew.where(~has_p, (n * ew + k * df.prior) / (n + k))
+        if inj == "inj1":
+            base = base + df.d003 - df.d008
+        base = base.clip(lower=0.0)
+    return (base + (df.adj_r002 if r002 else 0.0)).clip(lower=0.0), base
+
+
+def _r016_p_over(dist: str, mu, base, pos, t, par):
+    from scipy.stats import norm, nbinom
+    mu = np.maximum(np.asarray(mu, float), 0.05)
+    if dist == "D0":
+        floor = np.where(pos == "RB", R016_SIGMA_FLOOR["RB"], R016_SIGMA_FLOOR["WR"])
+        scale = np.where(pos == "RB", R016_SIGMA_SCALE["RB"], R016_SIGMA_SCALE["WR"])
+        sig = np.maximum(floor, np.asarray(base, float) * scale)
+        return 1 - norm.cdf((t - mu) / sig)
+    if dist == "D2":
+        sig = np.where(pos == "RB", par["sd"]["RB"], par["sd"]["WR"])
+        return 1 - norm.cdf((t - mu) / sig)
+    r = np.where(pos == "RB", par["r"]["RB"], par["r"]["WR"])
+    return 1 - nbinom.cdf(np.floor(t), r, r / (r + mu))
+
+
+def _r016_logscore(dist, mu, base, pos, y, par):
+    from scipy.stats import norm, nbinom
+    mu = np.maximum(np.asarray(mu, float), 0.05)
+    if dist == "D1":
+        r = np.where(pos == "RB", par["r"]["RB"], par["r"]["WR"])
+        p = nbinom.pmf(y, r, r / (r + mu))
+    else:
+        if dist == "D0":
+            floor = np.where(pos == "RB", R016_SIGMA_FLOOR["RB"], R016_SIGMA_FLOOR["WR"])
+            scale = np.where(pos == "RB", R016_SIGMA_SCALE["RB"], R016_SIGMA_SCALE["WR"])
+            sig = np.maximum(floor, np.asarray(base, float) * scale)
+        else:
+            sig = np.where(pos == "RB", par["sd"]["RB"], par["sd"]["WR"])
+        p = norm.cdf((y + 0.5 - mu) / sig) - norm.cdf((y - 0.5 - mu) / sig)
+    return float(np.log(np.clip(p, 1e-6, 1)).mean())
+
+
+def _r016_brier(df, cand, dist, par) -> float:
+    mu, base = _r016_mean(df, cand)
+    pos = df.pos.values
+    out = []
+    for o in R016_OFFSETS:
+        t = df.line.values + o
+        po = _r016_p_over(dist, mu.values, base.values, pos, t, par)
+        p = np.where(df.side.values == "over", po, 1 - po)
+        p = np.clip(p, 0.02, 0.98)
+        hit = (df.actual.values > t).astype(float)
+        y = np.where(df.side.values == "over", hit, 1 - hit)
+        out.append(((p - y) ** 2).mean())
+    return float(np.mean(out))
+
+
+def _r016_fit(df_tr, cand) -> dict:
+    """Dispersion per position on the training seasons, for this mean."""
+    mu, _ = _r016_mean(df_tr, cand)
+    par = {"r": {}, "sd": {}}
+    for pos in ("RB", "WR"):
+        m = df_tr.pos == pos
+        res = df_tr.actual[m] - mu[m]
+        excess = float((res ** 2 - mu[m]).sum())
+        par["r"][pos] = float((mu[m] ** 2).sum() / excess) if excess > 0 else 1e6
+        par["sd"][pos] = float(np.sqrt((res ** 2).mean()))
+    return par
+
+
+def _pregame_only_effectively_out():
+    """No-look-ahead mode. Game-day inactives (roster status INA) are
+    published ~90 min before kickoff, after the owner logs. Rewrite INA
+    to ACT in the weekly roster so R-003, R-008 and primary_at see what
+    the owner can see: injury-report Out plus IR/PUP/cut moves."""
+    orig = D._rosters_weekly
+    cache = {}
+    def patched(season):
+        if season not in cache:
+            rw = orig(season).copy()
+            rw.loc[rw.status == "INA", "status"] = "ACT"
+            cache[season] = rw
+        return cache[season]
+    D._rosters_weekly = patched
+
+
+def _run_r016_mode(a) -> None:
+    seasons = [int(x) for x in a.seasons.split(",")]
+    if a.pregame_info:
+        _pregame_only_effectively_out()
+        print("PREGAME-INFO MODE: game-day inactives (INA) hidden from R-003/R-008/primary_at\n")
+    print("R-016 backtest — plans/R-016-count-dist-ewma.md")
+    print("lines: proxy ± {−3…+3}; Brier = mean over the 7 lines. Fit on "
+          f"{seasons[:-1]}, hold out {seasons[-1]}.\n")
+    df = _r016_collect(seasons, a.from_week)
+    if a.dump:
+        df.to_pickle(a.dump)
+        print(f"  rows dumped to {a.dump}")
+    train, hold = df[df.season.isin(seasons[:-1])], df[df.season == seasons[-1]]
+    means = ["M0"] + [f"M1-h{h}-k{k}-inj{i}" for h in (3, 4) for k in (0, 3) for i in (0, 1)]
+
+    # Step 1 — select the mean per position on TRAIN under D1 (each
+    # candidate gets its own fitted r). Same choice reported under D0.
+    print("Table 1 — mean candidates, TRAIN Brier (lower = better)")
+    sel = {}
+    for pos in ("RB", "WR"):
+        tp = train[train.pos == pos]
+        rows = []
+        for c in means:
+            par = _r016_fit(train, c)
+            rows.append((c, _r016_brier(tp, c, "D0", par), _r016_brier(tp, c, "D1", par)))
+        t = pd.DataFrame(rows, columns=["mean", "D0", "D1"]).set_index("mean")
+        print(f"\n  {pos}\n" + t.to_string(float_format=lambda v: f"{v:.4f}"))
+        sel[pos] = t.D1.drop("M0").idxmin()
+        print(f"  → selected {pos} mean: {sel[pos]}")
+
+    # Mixed per-position mean: evaluate by splitting.
+    def brier_combo(d, mean_by_pos, dist, par_by_pos, r002=True):
+        tot, n = 0.0, 0
+        for pos in ("RB", "WR"):
+            dp = d[d.pos == pos]
+            if dp.empty:
+                continue
+            c = mean_by_pos[pos] + ("" if r002 else "-r002off")
+            tot += _r016_brier(dp, c, dist, par_by_pos[pos]) * len(dp); n += len(dp)
+        return tot / n
+
+    def pars(mean_by_pos, r002=True):
+        return {pos: _r016_fit(train, mean_by_pos[pos] + ("" if r002 else "-r002off"))
+                for pos in ("RB", "WR")}
+
+    live = {"RB": "M0", "WR": "M0"}
+    combos = {
+        "LIVE  M0 + D0":            (live, "D0", True),
+        "dist  M0 + D1 (NegBin)":   (live, "D1", True),
+        "dist  M0 + D2 (const σ)":  (live, "D2", True),
+        "mean  M1* + D0":           (sel, "D0", True),
+        "r002  M0 − R-002 + D0":    (live, "D0", False),
+        "COMBO M1* + D1":           (sel, "D1", True),
+        "COMBO M1* + D1 − R-002":   (sel, "D1", False),
+    }
+    print("\nTable 2 — per-season Brier (7-line mean) and Δ vs LIVE (+ = better)")
+    res = {}
+    for name, (mb, dist, r2) in combos.items():
+        pp = pars(mb, r2)
+        res[name] = {s: brier_combo(df[df.season == s], mb, dist, pp, r2) for s in seasons}
+        res[name]["logscore_hold"] = sum(
+            _r016_logscore(dist, *_r016_mean(hold[hold.pos == p],
+                           mb[p] + ("" if r2 else "-r002off")),
+                           hold[hold.pos == p].pos.values,
+                           hold[hold.pos == p].actual.values, pp[p]) * (hold.pos == p).sum()
+            for p in ("RB", "WR")) / len(hold)
+    out = pd.DataFrame(res).T
+    for s in seasons:
+        out[f"Δ{s}"] = out.loc["LIVE  M0 + D0", s] - out[s]
+    print(out.to_string(float_format=lambda v: f"{v:+.4f}" if abs(v) < 0.05 else f"{v:.4f}"))
+    print("\n(Δ > 0 in every season = passes the pre-declared ship rule.)")
+    print(f"\nFitted dispersion on TRAIN for the selected means: "
+          + ", ".join(f"{p}: r={_r016_fit(train, sel[p])['r'][p]:.2f}" for p in ("RB", "WR")))
+    print(f"n slots: train {len(train)}, hold {len(hold)}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--season", type=int, default=2025)
     ap.add_argument("--from-week", type=int, default=4,
                     help="skip the first weeks; ratings are mostly prior before then")
-    ap.add_argument("--mode", choices=("link", "brier"), default="link")
+    ap.add_argument("--mode", choices=("link", "brier", "r016"), default="link")
+    ap.add_argument("--pregame-info", action="store_true",
+                    help="r016 mode: hide game-day inactives (no look-ahead)")
+    ap.add_argument("--dump", default=None,
+                    help="r016 mode: pickle the collected slot rows here")
     ap.add_argument("--seasons", default="2023,2024,2025",
                     help="brier mode only: comma-separated seasons to backtest")
     ap.add_argument("--variant", default="all-table",
@@ -1343,6 +1639,8 @@ def main():
     a = ap.parse_args()
     if a.mode == "link":
         _run_link_mode(a)
+    elif a.mode == "r016":
+        _run_r016_mode(a)
     else:
         _run_brier_mode(a)
 

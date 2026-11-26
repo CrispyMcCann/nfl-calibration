@@ -176,7 +176,7 @@
         <label><span class="lab">Line (FanDuel)</span><input type="number" id="qline" step="0.5" placeholder="4.5"></label>
         <label><span class="lab">Over / under</span><select id="qou" disabled title="Locked to the queued side. Enter your probability that this side hits.">
           <option value="over">Over</option><option value="under">Under</option></select></label>
-        <label><span class="lab" title="Optional. If blank, formula uses base × game-script multiplier. If filled, your value replaces the formula's raw expected; R-001 still applies.">Mean override (optional)</span><input type="number" id="qexpected" step="0.1" placeholder="auto"></label>
+        <label><span class="lab" title="Optional. If blank, the formula mean is the queue's R-016 base. If filled, your value replaces that mean in the negative-binomial formula and the row is flagged as an override.">Mean override (optional)</span><input type="number" id="qexpected" step="0.1" placeholder="auto"></label>
         <label><span class="lab">Your probability (0–1)</span><input type="number" id="qmyp" step="0.01" min="0.01" max="0.99" placeholder="auto"></label>
       </div>
       <div class="readout" id="qformula" style="margin-top:10px;display:none"></div>
@@ -296,121 +296,74 @@ const nowISO = () => new Date().toISOString();
 function amToProb(o) { o = Number(o); return o < 0 ? Math.abs(o)/(Math.abs(o)+100) : 100/(o+100); }
 function devig(a, b) { const x = amToProb(a), y = amToProb(b); return x/(x+y); }
 
-/* === METHODOLOGY :: W11-R005c-R010cap-R011-R013-R014 ==================
+/* === METHODOLOGY :: W12-R016 ==========================================
  * SYNC CONTRACT. The weekly probability formula lives in three places
  * that must stay IDENTICAL:
  *   1. METHODOLOGY.md — authoritative statement of the formula
  *   2. this block (ui.html) — what the UI actually uses
- *   3. tools/calc.py — Python fallback
+ *   3. tools/calc.py — Python fallback (compute_myp_r016, nb_cdf)
  *
  * When you change this block, change METHODOLOGY.md and tools/calc.py
  * in the SAME commit and BUMP METH_VER to a new tag.
  *
- * Composition order for Week 10:
- *   1. R-003b base elevation      (slate.py; teammate OUT pushes base up)
- *   2. R-010 empirical Bayes      (slate.py; shrink current-season obs
- *                                  toward prior-season full-year,
- *                                  pseudo-count = Efron-Morris halflife)
- *   3. R-010cap magnitude clip    (slate.py; clip R-010 to
- *                                  trailing × [0.80, 1.20] — NEW W10)
- *   4. R-008 backup-return defl.  (slate.py; mirror of R-003)
- *      R-011 (W10b): R-008 net of R-010 — subtract only what R-010 has
- *      not already removed (slate.py, nflcal.data.r008_net_of_r010)
- *   5. formula raw_expected       = base × script_mult + matchup_adjust_r002
- *      R-013 (W10b): no pace multiplier. script_mult is R-012's slot;
- *      R-012 did not ship, so it is 1.0 (absent from the slate).
- *   6. R-005c position-specific σ (sigma_eff = max(SIGMA, base × SIGMA_SCALE[position]))
- *                                  SIGMA_SCALE bumped from 0.60/0.65 to
- *                                  0.70/0.75 — NEW W10
- *   (R-001 threshold shrinkage retired W9)
- *
- * `base` for the formula is base_*_r008 (R-003→R-010→R-010cap→R-008).
- * estimateProb mirrors tools/calc.py.one_prop; erf is A&S 7.1.26.
+ * Week 12 (R-016) — two parts, nothing else:
+ *   1. base  = R-016 EWMA base, computed by slate.py and shipped in the
+ *              queue's base_*_r008 field (the schema's formula input).
+ *              Exponentially weighted mean of this season's games,
+ *              half-life 3 games; WR shrunk toward last season with 3
+ *              pseudo-games, RB not shrunk.
+ *   2. my_p  = P(X on the queued side of the line),
+ *              X ~ NegBin(mean = base, size = NB_SIZE[position]).
+ *              Variance = mean + mean^2 / size. Clamp [0.02, 0.98].
+ * Retired W12 (evidence in METHODOLOGY.md): R-002 matchup, R-005c sigma,
+ * normal CDF, and the R-003/R-010/R-010cap/R-008/R-011/R-014 base chain
+ * (still computed by slate.py as diagnostics, never a formula input).
  * ======================================================================= */
-const METH_VER = "W11-R005c-R010cap-R011-R013-R014";
-const SIGMA = { rushing: 5.5, receiving: 2.5 };
-// R-002 constants. Position-specific EPA-allowed rank: 1=best D, 32=worst.
-const MATCHUP_BUMP = { rushing: 1.0, receiving: 0.5 };
-const MATCHUP_WORST_K = 8;
-const MATCHUP_BEST_K = 8;
-// R-005c (W10) position-specific variance scaling. Bumped from W9's
-// 0.60/0.65 to 0.70/0.75 after W10 backtest showed sigma_cap20 passed
-// strict policy (worst +0.0018, mean +0.0031 across 2023-2025). Still
-// inside PlayerProfiler's field-median CV band.
-const SIGMA_SCALE = { RB: 0.70, WR: 0.75 };
+const METH_VER = "W12-R016";
+const NB_SIZE = { RB: 12.5, WR: 26.7 };
+const P_CLAMP = [0.02, 0.98];
 
-function erf(x) {
-  const sign = x < 0 ? -1 : 1;
-  x = Math.abs(x);
-  const a1 =  0.254829592, a2 = -0.284496736, a3 =  1.421413741,
-        a4 = -1.453152027, a5 =  1.061405429, p = 0.3275911;
-  const t = 1 / (1 + p * x);
-  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
-  return sign * y;
-}
-function phi(z) { return 0.5 * (1 + erf(z / Math.SQRT2)); }
-
-function marketKey(market) {
-  return market === "rush_attempts" ? "rushing" : "receiving";
+/** P(X <= k), X ~ NegBin(mean, size). pmf recursion, mirrors calc.nb_cdf. */
+function nbCdf(k, mean, size) {
+  if (k < 0) return 0;
+  const mu = Math.max(mean, 0.05);
+  const q = size / (size + mu);
+  let p = Math.pow(q, size);
+  let total = p;
+  for (let j = 1; j <= k; j++) {
+    p *= (j - 1 + size) / j * (1 - q);
+    total += p;
+  }
+  return Math.min(1, total);
 }
 
 /**
- * R-002: additive matchup bump from the opposing defense's position-
- * specific EPA-allowed rank. Receiving reads passRankOpp; rushing reads
- * rushRankOpp. Returns 0 if the relevant rank is missing/non-finite.
- */
-function matchupAdjustR002(market, passRankOpp, rushRankOpp) {
-  const mk = marketKey(market);
-  const rank = mk === "rushing" ? rushRankOpp : passRankOpp;
-  if (!Number.isFinite(rank)) return 0.0;
-  const bump = MATCHUP_BUMP[mk];
-  if (rank >= 33 - MATCHUP_WORST_K) return +bump;  // 25..32 → worst D
-  if (rank <= MATCHUP_BEST_K)       return -bump;  // 1..8   → best D
-  return 0.0;
-}
-
-/**
- * Compute formula_p and intermediates for one prop.
- * Inputs: base (R-003→R-010→R-008 composed), pace, usageFactor,
- *   passRankOpp, rushRankOpp, matchupOverride (optional; if finite,
- *   replaces R-002's output), line, position ("RB" or "WR" for
- *   R-005' per-position sigma; defaults to RB).
+ * Compute formula_p and intermediates for one prop (mirrors
+ * tools/calc.py compute_myp_r016). Inputs: base (queue base_*_r008),
+ * line, side, position ("RB"/"WR"); matchupOverride, if finite, is the
+ * UI's mean override expressed as a delta on base. Other arguments are
+ * accepted for call-site compatibility and ignored.
  * Returns { formulaP, expected, rawExpected, deviation, r002Fired,
- *   r005Scaled, matchupAdjust, sigma } or null if inputs incomplete.
+ *   r005Scaled, matchupAdjust, sigma, size } or null if inputs incomplete.
  */
-function estimateProb({ market, side, base, pace, usageFactor,
-                        passRankOpp, rushRankOpp, matchupOverride, line,
-                        position }) {
-  // W11: pace no longer enters the formula (the base was already produced
-  // at the team's own pace; backtest w11_nopace). `pace` stays a parameter
-  // so callers don't change; it is a control column only.
+function estimateProb({ side, base, matchupOverride, line, position }) {
   if (!Number.isFinite(base) || !Number.isFinite(line)) return null;
-  const uf = Number.isFinite(usageFactor) ? usageFactor : 1.0;
-  const r002 = matchupAdjustR002(market, passRankOpp, rushRankOpp);
-  const ma = Number.isFinite(matchupOverride) ? matchupOverride : r002;
-  const mk = marketKey(market);
-  const sigmaFloor = SIGMA[mk];
-  // R-005c (W10) position-specific sigma scaling. Default to RB values
-  // if position missing (slightly tighter is OK; the floor keeps us honest).
-  const scale = SIGMA_SCALE[position === "WR" ? "WR" : "RB"];
-  const sigma = Math.max(sigmaFloor, base * scale);
-  const raw = base * uf + ma;
-  const dev = raw - base;
-  // R-001 retired W9 — raw IS expected now.
-  const expected = raw;
-  const z = (line - expected) / sigma;
-  const pOver = 1 - phi(z);
+  const size = NB_SIZE[position === "RB" ? "RB" : "WR"];
+  const delta = Number.isFinite(matchupOverride) ? matchupOverride : 0;
+  const expected = Math.max(base + delta, 0.05);
+  const pOver = 1 - nbCdf(Math.floor(line), expected, size);
   let myP = side === "over" ? pOver : 1 - pOver;
-  myP = Math.max(0.02, Math.min(0.98, myP));
+  myP = Math.max(P_CLAMP[0], Math.min(P_CLAMP[1], myP));
   return {
     formulaP: Number(myP.toFixed(4)),
     expected: Number(expected.toFixed(3)),
-    rawExpected: Number(raw.toFixed(3)),
-    deviation: Number(dev.toFixed(3)),
-    r002Fired: ma !== 0,
-    r005Scaled: sigma > sigmaFloor + 1e-9,
-    matchupAdjust: Number(ma.toFixed(3)),
-    sigma: Number(sigma.toFixed(3)),
+    rawExpected: Number(expected.toFixed(3)),
+    deviation: Number(delta.toFixed(3)),
+    r002Fired: false,
+    r005Scaled: false,
+    matchupAdjust: Number(delta.toFixed(3)),
+    sigma: Number(Math.sqrt(expected + expected * expected / size).toFixed(3)),
+    size,
   };
 }
 /* === /METHODOLOGY ====================================================== */
@@ -1111,32 +1064,13 @@ function recomputeFormula() {
   const diverged = Number.isFinite(typedP) &&
     Math.abs(typedP - r.formulaP) > 0.001;
 
-  // R-001 retired on W9 — no shrinkage chip to show.
-  // R-003, R-010 (replaces R-006), R-008 all fire in the slate; the UI
-  // reports them from the queue stub flags. R-003 shows raw → elevated;
-  // R-010 shows elevated → ebayes-shrunk; R-008 shows shrunk → deflated.
-  const rawBase  = (q.market === "rush_attempts" ? q.base_car       : q.base_rec);
-  const r003Base = (q.market === "rush_attempts" ? q.base_car_r003  : q.base_rec_r003);
-  const r010Base = (q.market === "rush_attempts" ? q.base_car_r010  : q.base_rec_r010);
-  const r003 = q.r003_fires
-    ? `<span style="color:var(--warn)">R-003 fired · base ${Number(rawBase).toFixed(2)} → ${Number(r003Base).toFixed(2)}</span>`
-    : "";
-  // R-010cap: the slate's r010_notes string includes "(capped)" when the
-  // ±20% clip bound. Mirror that into the chip so the audit shows at a glance.
-  const r010Capped = typeof q.r010_notes === "string" && q.r010_notes.indexOf("(capped)") >= 0;
-  const r010 = q.r010_fires
-    ? `<span style="color:var(--warn)">R-010 ebayes${r010Capped ? " (capped)" : ""} · base ${Number(r003Base).toFixed(2)} → ${Number(r010Base).toFixed(2)}</span>`
-    : "";
-  const r008 = q.r008_fires
-    ? `<span style="color:var(--warn)">R-008 fired · base ${Number(r010Base || r003Base).toFixed(2)} → ${Number(base).toFixed(2)}</span>`
-    : "";
-  const r002 = r.r002Fired
-    ? `<span style="color:var(--warn)">R-002 fired · matchup ${r.matchupAdjust>=0?"+":""}${r.matchupAdjust}</span>`
-    : "";
-  // R-005c fires when base × SIGMA_SCALE[position] exceeds the market floor.
-  const r005 = r.r005Scaled
-    ? `<span style="color:var(--warn)">R-005c scaled · σ ${SIGMA[marketKey(q.market)]} → ${r.sigma}</span>`
-    : "";
+  // W12 (R-016): one chip with the base's audit string. The retired
+  // R-003/R-010/R-008 values are still in the queue as diagnostics but
+  // no longer feed the formula, so they get no chip.
+  const r016Note = typeof q.r010_notes === "string" ? q.r010_notes.split(" | ")[0] : "";
+  const r016 = r016Note.startsWith("R-016")
+    ? `<span style="color:var(--ink-faint)">${esc(r016Note)}</span>`
+    : `<span style="color:var(--warn)"><b>stale slate</b>: this prop has no R-016 base — regenerate week_N.json with the current slate.py and load it again before logging</span>`;
   const overrideFlag = Number.isFinite(override)
     ? `<span style="color:var(--warn)">mean override</span>` : "";
   const divergedFlag = diverged
@@ -1145,9 +1079,9 @@ function recomputeFormula() {
   $("qformula").style.display = "flex";
   $("qformula").innerHTML =
     `<span>expected <b class="big">${r.expected}</b></span>` +
-    `<span>σ <b class="big">${r.sigma}</b></span>` +
+    `<span>sd <b class="big">${r.sigma}</b> <span style="color:var(--ink-faint)">NegBin size ${r.size}</span></span>` +
     `<span>formula my_p <b class="big">${r.formulaP.toFixed(4)}</b></span>` +
-    r003 + r010 + r008 + r002 + r005 + overrideFlag + divergedFlag +
+    r016 + overrideFlag + divergedFlag +
     `<span style="color:var(--ink-faint)">(${METH_VER})</span>`;
 }
 

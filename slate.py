@@ -289,6 +289,22 @@ def main():
                                    or abs(base_car_r008 - defl["base_car"]) > 0.005):
                     r008_notes += (f" (net of R-010: rec {defl['base_rec']:.2f}->{base_rec_r008:.2f}, "
                                    f"car {defl['base_car']:.2f}->{base_car_r008:.2f})")
+                # W12 (R-016): the formula input is the R-016 base, not the
+                # chain above. R-003/R-010/R-008 still run so their values
+                # stay in the record as DIAGNOSTICS (base_*_r003,
+                # base_*_r010, *_fires, *_notes) for post-season comparison;
+                # none of them feeds the formula. base_*_r008 is the
+                # schema's formula-input column, so it carries R-016.
+                base_rec_r016, note_rec_r016 = D.base_r016(
+                    SEASON, pl["name"], week - 1, "receiving", pos)
+                base_car_r016, note_car_r016 = D.base_r016(
+                    SEASON, pl["name"], week - 1, "rushing", pos)
+                note_r016 = note_car_r016 if market == "rush_attempts" else note_rec_r016
+                diag_r008 = base_car_r008 if market == "rush_attempts" else base_rec_r008
+                r010_notes = note_r016 + (f" | diag R-010 (unused): {r010_notes}" if r010_notes else "")
+                r008_notes = (f"diag R-008 chain (unused) base {diag_r008:.2f}"
+                              + (f"; {r008_notes}" if r008_notes else ""))
+                base_rec_r008, base_car_r008 = base_rec_r016, base_car_r016
                 is_home = entry["game"].split(" @ ")[1] == team
                 return {"game": entry["game"], "game_date": entry["date"],
                         "kickoff": entry["kickoff"],
@@ -321,9 +337,9 @@ def main():
                         # predicted team and the opponent. 1 = best. The
                         # Vegas line already prices these in — they are
                         # UI readout for human judgement, not formula
-                        # inputs (R-002 reads pass_def_rank_opp /
-                        # rush_def_rank_opp above; nothing else here is
-                        # consumed by compute_myp).
+                        # inputs (R-002 read pass_def_rank_opp /
+                        # rush_def_rank_opp through W11; retired W12, so
+                        # nothing here is a formula input any more).
                         "own_pass_def_rank": own_pass_def,
                         "own_rush_def_rank": own_rush_def,
                         "own_pass_off_rank": own_pass_off,
@@ -346,9 +362,10 @@ def main():
                         "base_car_r010": base_car_r010,
                         "r010_fires": r010_fires,
                         "r010_notes": r010_notes,
-                        # --- R-008 (backup-return deflation). FORMULA INPUT
-                        # on W8+ rows. On W9+ equals base_*_r010 when R-008
-                        # doesn't fire.
+                        # --- FORMULA INPUT. W8-W11: post-R-008 chain base.
+                        # W12+ (R-016): the R-016 EWMA base; the R-008 chain
+                        # value is kept only inside r008_notes ("diag").
+                        # r010_notes leads with the R-016 audit string.
                         "base_rec_r008": base_rec_r008,
                         "base_car_r008": base_car_r008,
                         "r008_fires": r008_fires,

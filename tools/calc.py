@@ -3,8 +3,8 @@
 methodology block.
 
 Walks one prop at a time: you give it the handful of numbers the queue
-is already showing you, it applies the METHODOLOGY.md Week 6 formula
-(R-003 base elevation, R-002 position-specific matchup, R-001 shrinkage)
+is already showing you, it applies the METHODOLOGY.md Week 12 formula
+(R-016: EWMA base from the queue, negative-binomial count distribution)
 and prints the my_p you can type into the UI. Loops until Ctrl-C or EOF.
 
     python tools/calc.py
@@ -31,8 +31,22 @@ from __future__ import annotations
 import math
 import sys
 
-# Constants — must match METHODOLOGY.md Week 10 AND ui.html's METHODOLOGY block.
-METH_VER = "W11-R005c-R010cap-R011-R013-R014"
+# ---------------------------------------------------------------------------
+# LIVE (W12) constants — must match METHODOLOGY.md "Week 12" AND ui.html's
+# METHODOLOGY block. R-016: my_p = P(X on the queued side of the line) for
+# X ~ NegBin(mean = base, size = NB_SIZE[position]). No matchup, pace,
+# script or sigma rules. NB_SIZE fit by method of moments on 2023-2025
+# slot residuals of the R-016 base, pregame information only
+# (plans/R-016-count-dist-ewma.md). Variance = mean + mean^2 / size.
+# ---------------------------------------------------------------------------
+METH_VER = "W12-R016"
+NB_SIZE = {"RB": 12.5, "WR": 26.7}
+P_CLAMP = (0.02, 0.98)
+
+# ---------------------------------------------------------------------------
+# LEGACY (W4-W11) constants below. Retired from the live formula in W12;
+# kept so validate.py's compute_myp() can still reproduce old versions.
+# ---------------------------------------------------------------------------
 SIGMA = {"rushing": 5.5, "receiving": 2.5}
 SHRINK_THRESHOLD = {"rushing": 3.0, "receiving": 1.5}  # retired W9 (R-001 dropped)
 SHRINK_FACTOR = 0.5                                   # retired W9 (R-001 dropped)
@@ -85,7 +99,10 @@ def compute_myp(market: str, side: str, base: float, pace: float,
                 apply_r001: bool = False,
                 sigma_scale: float | None = None,
                 position: str | None = None) -> dict:
-    """Pure form of the Week 9 probability formula. `one_prop` is the
+    """LEGACY (W4-W11) formula — NOT the live W12 formula; see
+    compute_myp_r016. Kept so validate.py can reproduce old versions.
+
+    Pure form of the Week 9 probability formula. `one_prop` is the
     interactive wrapper; validate.py reuses it to backtest variants.
 
     Composition (W9):
@@ -138,6 +155,39 @@ def compute_myp(market: str, side: str, base: float, pace: float,
     }
 
 
+def nb_cdf(k: int, mean: float, size: float) -> float:
+    """P(X <= k) for X ~ NegBin(mean, size), by the pmf recursion
+    p0 = q^size, p_j = p_{j-1} * (j-1+size)/j * (1-q), q = size/(size+mean).
+    ui.html's nbCdf is the same loop line for line."""
+    if k < 0:
+        return 0.0
+    mean = max(float(mean), 0.05)
+    q = size / (size + mean)
+    p = q ** size
+    total = p
+    for j in range(1, int(k) + 1):
+        p *= (j - 1 + size) / j * (1 - q)
+        total += p
+    return min(1.0, total)
+
+
+def compute_myp_r016(side: str, base: float, line: float, position: str,
+                     expected_override: float | None = None) -> dict:
+    """LIVE W12 formula (R-016). `base` is the queue's base_car_r008 /
+    base_rec_r008 (the R-016 EWMA base). A finite `expected_override`
+    replaces the mean (UI's 'mean override' field)."""
+    pos = "RB" if position == "RB" else "WR"
+    size = NB_SIZE[pos]
+    expected = float(expected_override) if expected_override is not None else float(base)
+    expected = max(expected, 0.05)
+    p_over = 1.0 - nb_cdf(math.floor(line), expected, size)
+    my_p = p_over if side == "over" else 1.0 - p_over
+    my_p = max(P_CLAMP[0], min(P_CLAMP[1], my_p))
+    sd = math.sqrt(expected + expected * expected / size)
+    return {"my_p": my_p, "expected": expected, "p_over": p_over,
+            "size": size, "sd": sd}
+
+
 def ask(label: str, caster=str, default=None, choices=None) -> object:
     """Prompt until the user gives a valid value. EOF exits the program."""
     while True:
@@ -177,61 +227,20 @@ def one_prop() -> None:
                  choices=("rushing", "receiving", "r", "rec"))
     market = "rushing" if market in ("rushing", "r") else "receiving"
     side = ask("side (over/under)", str.lower, choices=("over", "under"))
-    base = ask("base (post-R-003 post-R-010 post-R-008 base from queue: "
-               "base_car_r008 for rushing, base_rec_r008 for receiving)", float)
-    pos = ask("position (RB/WR for sigma scaling)", str.upper,
-              choices=("RB", "WR"))
-    # W11: pace no longer enters the live formula (backtest w11_nopace);
-    # compute_myp keeps its pace argument so old backtest variants still
-    # reproduce, and the live path passes the neutral 60.
-    pace = 60.0
-    usage_factor = ask("script_mult (R-012, from queue; 1.0 if absent)", float, default=1.0)
-    pass_rank_opp = ask("pass_def_rank_opp (1=best D, blank if unknown)",
-                        _opt_int, default=None)
-    rush_rank_opp = ask("rush_def_rank_opp (1=best D, blank if unknown)",
-                        _opt_int, default=None)
+    base = ask("base (R-016 base from queue: base_car_r008 for rushing, "
+               "base_rec_r008 for receiving)", float)
+    pos = ask("position (RB/WR)", str.upper, choices=("RB", "WR"))
     line = ask("line (FanDuel)", float)
 
-    # Composition: R-003, R-010, and R-008 are already baked into `base`
-    # (user typed the queue's base_*_r008 value: R-003 → R-010 → R-008).
-    # R-002 populates matchup_adjust. Formula then runs with R-005's
-    # position-specific sigma scaling. R-001 retired on W9.
-    result = compute_myp(market, side, base, pace, line,
-                         pass_rank_opp=pass_rank_opp,
-                         rush_rank_opp=rush_rank_opp,
-                         usage_factor=usage_factor,
-                         position=pos)
-    sigma = result["sigma_eff"]
-    threshold = SHRINK_THRESHOLD[market]
-    matchup_adjust = result["matchup_adjust"]
-    raw_expected = result["raw_expected"]
-    deviation = result["deviation"]
-    r001_fired = result["r001_fired"]
-    expected = result["expected"]
-    my_p = result["my_p"]
-    z = (line - expected) / sigma
-    p_over = 1 - phi(z)
-
+    r = compute_myp_r016(side, base, line, pos)
     print()
-    r002_tag = ""
-    if matchup_adjust != 0:
-        rk = rush_rank_opp if market == "rushing" else pass_rank_opp
-        r002_tag = f"  R-002 fires  → matchup_adjust = {matchup_adjust:+.2f} (opp pos-rank {rk})"
-    else:
-        r002_tag = "  R-002 skipped → matchup_adjust = 0.00"
-    print(r002_tag)
-    print(f"  raw_expected = {base:.2f} × {usage_factor:.3f}"
-          f" + {matchup_adjust:+.2f}  =  {raw_expected:.3f}")
-    print(f"  deviation    = {deviation:+.3f}   "
-          f"(threshold ±{threshold:.1f} for {market})")
-    print(f"  expected      = raw_expected = {expected:.3f}  (R-001 retired W9)")
-    print(f"  σ_eff (R-005c) = {sigma:.3f}  "
-          f"(position={pos}, scale={SIGMA_SCALE[pos]:.2f})")
-    print(f"  z            = ({line:.1f} − {expected:.3f}) / {sigma:.3f} = {z:+.3f}")
+    print(f"  X ~ NegBin(mean = {r['expected']:.3f}, size = {r['size']:g})   "
+          f"sd = {r['sd']:.3f}")
+    print(f"  p_over = P(X > {line:g}) = 1 − F({math.floor(line)}) = {r['p_over']:.4f}")
     print()
-    print(f"  →  enter my_p = {my_p:.4f}   (side = {side})")
-    print(f"     p_over = {p_over:.4f}, p_under = {1 - p_over:.4f}")
-    if abs(my_p - 0.5) < 0.03:
+    print(f"  →  enter my_p = {r['my_p']:.4f}   (side = {side})")
+    print(f"     p_over = {r['p_over']:.4f}, p_under = {1 - r['p_over']:.4f}")
+    if abs(r["my_p"] - 0.5) < 0.03:
         print("     (near coin-flip — no edge in either direction)")
     print("─" * 60)
 

@@ -194,10 +194,10 @@ this week.
 
 | # | column | type | notes |
 |---|---|---|---|
-| 67 | `base_rec_r008` | float | post-R-008 receiving base; formula input on W8+ |
-| 68 | `base_car_r008` | float | post-R-008 rushing base; formula input on W8+ |
+| 67 | `base_rec_r008` | float | receiving formula input. W8–W11: post-R-008 chain base. W12+ (`W12-R016`): the R-016 EWMA base; the R-008 chain value moves into `r008_notes` as a diagnostic |
+| 68 | `base_car_r008` | float | rushing formula input. W8–W11: post-R-008 chain base. W12+: the R-016 EWMA base (see `base_rec_r008`) |
 | 69 | `r008_fires` | bool-as-string | `True` if R-008 deflated the base this row |
-| 70 | `r008_notes` | string | audit string naming each returning teammate, their fraction of trailing weeks out, their season rate, and the applied deflation. Empty when R-008 doesn't fire. |
+| 70 | `r008_notes` | string | audit string naming each returning teammate, their fraction of trailing weeks out, their season rate, and the applied deflation. Empty when R-008 doesn't fire. W12+: always starts `diag R-008 chain (unused) base X` — the value the retired chain would have used as the formula input. |
 
 ### R-010 audit (4) — empirical-Bayes base (W10: capped)
 
@@ -228,7 +228,7 @@ longer a formula input.
 | 71 | `base_rec_r010` | float | post-R-003 post-R-010 (post-cap on W10+) receiving base; R-008 input |
 | 72 | `base_car_r010` | float | post-R-003 post-R-010 (post-cap on W10+) rushing base; R-008 input |
 | 73 | `r010_fires` | bool-as-string | `True` when R-010 moved the base by more than 5% from R-003 output. False only when the shrinkage result exactly matched R-003 output. |
-| 74 | `r010_notes` | string | audit string naming the prior source (`prior` / `pos-prior`), the halflife, `(capped)` tag when the ±20% clip bound on W10+, pre/post bases, sample sizes. Empty when R-010 doesn't fire. |
+| 74 | `r010_notes` | string | audit string naming the prior source (`prior` / `pos-prior`), the halflife, `(capped)` tag when the ±20% clip bound on W10+, pre/post bases, sample sizes. Empty when R-010 doesn't fire. W12+: leads with the R-016 audit string (`R-016: ewma(h=3) …`); any R-010 note follows after ` | diag R-010 (unused): `. |
 
 ---
 

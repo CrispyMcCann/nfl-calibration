@@ -89,7 +89,7 @@ No test suite, no linter, no build. Every entry point is a script at the repo ro
 | `python merge.py [--dry-run] [export.csv]` | Fold the UI's "Copy all as CSV" (pasted into `ui_export.csv`) into `predictions.csv`. The only path from UI to CSV. |
 | `python resolve.py [--dry-run]` | Fill `actual`/`outcome`/`resolved_at` from nflverse for pending rows. |
 | `python score.py [--min-n N] [--plot path.png] [--bootstrap B]` | Brier scores, calibration table, edge regression. `--min-n` defaults to 100. |
-| `python tools/calc.py` | Interactive probability calculator — applies the current METHODOLOGY.md formula and R-001 shrinkage. Use alongside the UI while logging to avoid calculator-key errors. |
+| `python tools/calc.py` | Interactive probability calculator — applies the current METHODOLOGY.md formula (W12: R-016 negative binomial). Use alongside the UI while logging to avoid calculator-key errors. |
 | `python validate.py --season YYYY [--from-week W]` | Backtest the mechanism (not the market) on a completed season. Defaults to 2025. |
 
 `SEASON = 2026` is hardcoded in `slate.py`; `log.py` defaults `--season 2026`.
@@ -145,9 +145,11 @@ three places that must stay identical:
    `/* === METHODOLOGY :: <ver> =============` inside `<script>`. The
    constant `METH_VER` is the version string written to every row's
    `methodology_version` column.
-3. `tools/calc.py` — the Python fallback. Constants `SIGMA`,
-   `SHRINK_THRESHOLD`, `SHRINK_FACTOR` and the formula body must
-   match the JS block.
+3. `tools/calc.py` — the Python fallback. Constants `METH_VER`,
+   `NB_SIZE`, `P_CLAMP` and the bodies of `nb_cdf` /
+   `compute_myp_r016` must match the JS block (`nbCdf` /
+   `estimateProb`). `compute_myp` there is the retired W4–W11
+   formula, kept only so `validate.py` can reproduce old versions.
 
 **When you change any of them, change all three in the same commit and
 bump `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`,

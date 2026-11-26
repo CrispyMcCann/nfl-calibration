@@ -30,7 +30,7 @@ The formula below lives in three places that **must stay identical**:
 
 **Change any of them → change all three in the same commit, and bump
 `METH_VER` to a new tag** (convention: `W<week-first-active>-<rule-list>`;
-current: `W10-R005c-R010cap`). Rows logged under the old tag keep it. New rows get
+current: `W12-R016`). Rows logged under the old tag keep it. New rows get
 the new tag. The write-up splits calibration by `methodology_version`
 band, so divergence between the three sources silently corrupts the
 record. If you're a future Claude and only one of the three looks like
@@ -52,6 +52,11 @@ For each prop:
 
 Everything below is one of: (a) how `mean` is computed, (b) how
 `sigma` is computed, (c) rules for structured adjustments to `mean`.
+
+From Week 12 (R-016), steps 2-3 use a negative-binomial count
+distribution instead of a normal: the spread is set by a fitted size
+parameter, not a sigma, and step 3 is the NegBin tail at `floor(line)`.
+See "Week 12 — the current strategy".
 
 ---
 
@@ -931,7 +936,158 @@ nothing like noise. A targeted diagnostic of why 2025 reversed (week-
 by-week, divergent-slot-by-slot) would likely find a specific data
 issue to patch, at which point the pre-declared bar could be rerun.
 
-## Week 11 — the current strategy
+## Between Week 11 and Week 12 — teardown and rebuild (shipped 2026-11-26)
+
+**What happened.** After week 11 resolved, the owner asked for a full
+audit of the methodology: tear down any rule that is faulty, confounded,
+or a band-aid on a deeper problem, and replace it with a method grounded
+in evidence. The pre-declared R-016 ship rule
+(`plans/R-016-count-dist-ewma.md`) was **overridden by the owner**:
+W12 is chosen by the evidence below, not gated by a pre-registered
+test. The W12 band must be written up as a new method scored
+prospectively, not as a pre-registered improvement. The selection
+filter, prop set, analysis plan, and all logged rows are unchanged.
+
+### Why the old harness could not see the problems
+
+1. **One line, at the median.** `validate.py --mode brier` scored each
+   prop against one synthetic line: the player's trailing median. That
+   line sits next to the model's mean, the one place a too-wide spread
+   costs nothing. R-005, R-005' and R-005c were all chosen on it.
+   `--mode r016` scores seven lines (proxy −3 … +3) and the log score
+   of the exact count.
+2. **Look-ahead on injuries.** `_effectively_out` and R-008 read the
+   weekly roster's `status`, which includes game-day inactives (INA,
+   published ~90 min before kickoff). Logging happens Thursday to
+   Saturday. In the backtest R-003, R-008 and `primary_at` saw
+   information the owner never has. `--pregame-info` rewrites INA to
+   ACT. All W12 evidence uses pregame information only.
+3. **Rules judged on single seasons and anecdotes.** Season-to-season
+   swings of ±0.005 Brier are noise at ~260 slots per position-season.
+   Several rules were shipped after one or two live misses (Swift,
+   Allgeier, Irving, Demercado). W12 judges every rule pooled over
+   2023-2025 with a 95 % game-clustered bootstrap CI.
+
+### Audit — each rule removed from the live W11 chain
+
+Same slots as the live queue (`build_slate` + `primary_at`, all four
+roles, weeks 4+), 2023-2025, pregame information, negative-binomial
+probabilities with size fit on 2023-24. Δ = live Brier − variant Brier
+(+ = the variant is better than live). "—" = CI includes 0.
+
+| rule | RB Δ [95 % CI] | WR Δ [95 % CI] | verdict |
+|---|---|---|---|
+| drop R-003 (teammate-out bump) | −0.0014 [−0.0041, +0.0014] — | +0.0001 [−0.0019, +0.0021] — | no evidence; with look-ahead it looked better |
+| drop R-008/R-011 (teammate-return cut) | −0.0005 [−0.0033, +0.0021] — | −0.0000 [−0.0013, +0.0012] — | no evidence; leak-dependent |
+| drop R-010 (ebayes shrink) | −0.0089 [−0.0158, −0.0023] WORSE | −0.0092 [−0.0129, −0.0055] WORSE | real need: trailing-3 is too short |
+| drop R-010cap | −0.0041 [−0.0095, +0.0007] — | +0.0012 [−0.0020, +0.0048] — | patch on R-010's over-shrink |
+| drop R-014 (role-change prior) | −0.0049 [−0.0089, −0.0008] WORSE | +0.0015 [−0.0003, +0.0034] — | patch on R-010's prior (below) |
+| add R-002 (matchup bump) | −0.0003 [−0.0027, +0.0020] — | −0.0005 [−0.0024, +0.0015] — | no evidence in any season |
+| raw trailing-3 (no rules) | −0.0091 WORSE | −0.0076 WORSE | |
+| **EWMA h=3** | −0.0000 [−0.0066, +0.0063] — | −0.0008 [−0.0044, +0.0029] — | one rule matches the whole chain |
+| **EWMA h=3 + prior 3 pseudo-games** | −0.0012 — | **+0.0038 [+0.0000, +0.0076] BETTER** | WR: beats the chain |
+| EWMA h=3 + prior 6 | −0.0078 WORSE | +0.0041 — | RB prior hurts |
+| EWMA h=3 + R-003/R-008 deltas | −0.0013 — | −0.0030 — | injury deltas add nothing on a sound base |
+
+### Diagnosis — what each old rule was really patching
+
+- **The root problem was the trailing-3 window.** Three games is too
+  short. R-006 (retired), R-010, R-010cap and R-014 were successive
+  patches on that one problem. R-010 fixed it by shrinking toward last
+  season with a pseudo-count of 29.5 games (RB). That over-weighted
+  last season, so R-010cap clipped it to ±20 %. Last season's rate is
+  often wrong for RBs (role and team changes), so R-014 swapped in a
+  positional prior. The audit bears this out: for RBs, any weight on
+  last season hurts (prior k=6 is significantly WORSE), which is
+  exactly why R-014 "helped". An exponentially weighted mean over the
+  whole season fixes the root problem with one parameter and makes
+  all four patches unnecessary.
+- **R-005 / R-005' / R-005c widened sigma to hide a weak mean.** The
+  W9 misses that triggered R-005c were mean errors, not spread errors.
+  Under R-005c, real outcomes piled into the middle of the predicted
+  distribution (randomized-PIT deciles, 2023-25 pregame:
+  0.008 0.067 0.117 0.185 0.150 0.140 0.127 0.105 0.068 0.034 — a flat
+  0.10 is calibrated). The live record agrees: z-score SD 0.63 RB /
+  0.79 WR (1.0 = right). Carries and receptions are counts, so the
+  root fix is a count distribution with its dispersion fit to data.
+  Negative binomial PIT deciles: 0.096 0.087 0.102 0.102 0.105 0.093
+  0.095 0.098 0.113 0.109.
+- **R-003 / R-008 / R-011 were confounded.** Their backtest support
+  came partly from game-day inactives. With pregame information only,
+  neither rule moves Brier for either position. R-011 existed only
+  because R-008 and R-010 double-counted.
+- **R-002 never showed signal** on the live-chain slots in any
+  season, with or without look-ahead.
+- **Selection bias is small.** The queue picks players by trailing-3
+  share, so trailing-3 overstates them: actual − trailing-3 = −0.20
+  carries (RB), −0.11 receptions (WR). EWMA's bias is +0.19 / −0.09.
+  Not worth a rule.
+
+### Result — W12 vs the method as actually logged (W11 chain + R-002 + normal R-005c)
+
+Seven-line Brier, pooled 2023-25, pregame information, game-clustered CI:
+
+| | old | new | Δ (+ = new better) | 95 % CI | per season 23 / 24 / 25 |
+|---|---|---|---|---|---|
+| RB | 0.2180 | 0.2191 | −0.0011 | [−0.0061, +0.0041] | −0.0006 / −0.0095 / +0.0061 |
+| WR | 0.1598 | 0.1495 | **+0.0103** | [+0.0066, +0.0143] | +0.0122 / +0.0060 / +0.0125 |
+| all | 0.1890 | 0.1844 | **+0.0046** | [+0.0015, +0.0080] | +0.0060 / −0.0018 / +0.0092 |
+
+RB is a statistical tie on Brier, with one rule instead of six and a
+calibrated distribution; WR is better in every season.
+
+**What W12 does not fix.** Every box-score estimator tested lands
+within ~3 % RMSE of the others, against irreducible noise of ~5.7
+carries / ~2.3 receptions. The market line has information the box
+score does not (practice reports, depth-chart news, coach statements).
+W12 makes `my_p` honest and calibrated; it is not expected to close
+the Brier gap to the market. The owner ruled out using the FanDuel line
+as an input: the model has to stand on its own.
+
+Known limitation: R-016 gives no special treatment to a player whose
+role changed this week (e.g. a teammate ruled out). The audit found
+the old rules for this added nothing measurable, but the sample of
+such games is small. Those diagnostics stay in the record
+(`base_*_r003`, `base_*_r010`, `r003_fires`, `r008_notes`) so the
+question can be tested after the season.
+
+Evidence: `validate.py --mode r016 [--pregame-info]` (harness and
+Table 1/2), plus the pooled ablation and PIT analysis in this section.
+
+## Week 12 — the current strategy
+
+**Version tag:** `W12-R016`.
+
+```
+  base     = R-016: exponentially weighted mean of every game the
+             player has played this season, newest weighted most;
+             weight halves every 3 games.
+               RB: base = ewma
+               WR: base = (n·ewma + 3·prior) / (n + 3)
+                   prior = last season's per-game receptions if ≥5 games,
+                   otherwise no shrink. n = games this season.
+             No games this season → last season's mean, else positional
+             mean (14.0 car / 5.0 rec).
+             Computed by slate.py (nflcal.data.base_r016) and shipped in
+             base_car_r008 / base_rec_r008 (the formula-input columns).
+  my_p     = P(X on the queued side of the line),
+             X ~ NegBin(mean = base, size = 12.5 RB / 26.7 WR)
+             variance = mean + mean² / size
+             over:  1 − F(floor(line))      under: F(floor(line))
+  clamp    my_p ∈ [0.02, 0.98]
+```
+
+Size fit by method of moments on 2023-25 slot residuals of the R-016
+base, pregame information only. Nothing else enters `my_p`: no matchup,
+pace, game script, injury adjustment or sigma rule. The UI's "mean
+override" field still replaces the mean when the owner types one, and
+the row is flagged as an override.
+
+Retired at W12 (registry entries below say why): R-002, R-003b,
+R-005c, R-008, R-010, R-010cap, R-011, R-014, and the normal CDF.
+R-003/R-010/R-008 still run in `slate.py` as **diagnostics only**.
+
+## Week 11 — superseded strategy (rows logged 2026-11-19 to 2026-11-22)
 
 **Version tag:** `W11-R005c-R010cap-R011-R013-R014`.
 
@@ -1198,7 +1354,7 @@ source:      observed in Week 3 (2026-09-27). n=27; sample small.
 tooling:     `python tools/calc.py` applies this automatically.
 ```
 
-### R-002 — position-specific defense matchup  (added 2026-10-10, active Week 6)
+### R-002 — position-specific defense matchup  (added 2026-10-10, active Week 6) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   opp's position-specific EPA-allowed rank falls in top-8
@@ -1246,7 +1402,7 @@ backtest:    2023 +0.0032, 2024 +0.0006, 2025 −0.0001 Brier delta
              codification decision.
 ```
 
-### R-003 — teammate-injury base elevation  (added 2026-10-10, active Week 6; trigger expanded 2026-10-14 → R-003b)
+### R-003 — teammate-injury base elevation  (added 2026-10-10, active Week 6; trigger expanded 2026-10-14 → R-003b) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   a same-position teammate on the player's team is
@@ -1320,7 +1476,7 @@ backtest:    2023 −0.0013, 2024 +0.0027, 2025 +0.0002 Brier delta vs
              table and the codification rationale.
 ```
 
-### R-005 — variable-sigma scaling  (added 2026-10-22, active Week 7)
+### R-005 — variable-sigma scaling  (added 2026-10-22, active Week 7) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   always active (replaces the fixed SIGMA constant in the
@@ -1419,7 +1575,7 @@ backtest:    2023 +0.0013, 2024 +0.0019, 2025 +0.0038 Brier delta vs
              2025 +0.0051, worst-season +0.0027, mean +0.0036.
 ```
 
-### R-008 — teammate-return base deflation  (added 2026-10-29, active Week 8)
+### R-008 — teammate-return base deflation  (added 2026-10-29, active Week 8) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   a same-position teammate on the player's team was
@@ -1493,7 +1649,7 @@ backtest:    2023 +0.0054, 2024 +0.0052, 2025 -0.0001 Brier delta vs
              anomalies, not a shippable rule change.
 ```
 
-### R-010 — empirical-Bayes shrinkage toward prior-season (added 2026-11-01, active Week 9; shipped mid-W8; **gated by R-010cap on W10+**)
+### R-010 — empirical-Bayes shrinkage toward prior-season (added 2026-11-01, active Week 9; shipped mid-W8; **gated by R-010cap on W10+**) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   always runs on W9+ rows (replaces R-006 as the shrinkage
@@ -1603,7 +1759,7 @@ backtest:    sigma_up isolate: 2023 +0.0114, 2024 +0.0059, 2025 +0.0102.
              carries most of the W9 Brier gain.
 ```
 
-### R-005c — upgraded sigma scaling (0.70 RB / 0.75 WR)  (added 2026-11-12, active Week 10)
+### R-005c — upgraded sigma scaling (0.70 RB / 0.75 WR)  (added 2026-11-12, active Week 10) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   always runs on W10+ rows (supersedes R-005').
@@ -1632,7 +1788,7 @@ backtest:    sigma_075 isolate vs W9: 2023 +0.0007, 2024 -0.0004,
              Worst +0.0018, mean +0.0031 — passes strict policy.
 ```
 
-### R-010cap — magnitude cap on R-010 ebayes output  (added 2026-11-12, active Week 10)
+### R-010cap — magnitude cap on R-010 ebayes output  (added 2026-11-12, active Week 10) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   always runs on W10+ rows alongside R-010.
@@ -1705,7 +1861,7 @@ see:         "Between Week 9 and Week 10" entry above for the full
 ### Placeholder format for future rules:
 
 ```
-### R-011 — R-008 net of R-010  (added 2026-11-14, active W10b)
+### R-011 — R-008 net of R-010  (added 2026-11-14, active W10b) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   R-008 fires (unchanged trigger).
@@ -1752,7 +1908,7 @@ code:        ui.html estimateProb; tools/calc.py one_prop passes pace=60
              (compute_myp keeps its pace argument for old backtest variants).
 ```
 
-### R-014 — role-change prior for R-010  (added 2026-11-19, active Week 11)
+### R-014 — role-change prior for R-010  (added 2026-11-19, active Week 11) **— retired 2026-11-26 (W12, see "Between Week 11 and Week 12")**
 
 ```
 condition:   player has ≥4 current-season games AND ≥5 prior-season games
@@ -1833,6 +1989,33 @@ status:      inert. nflcal/data.py keeps primary_at's primary_mode
              and r015_rows side table. Live slate stays on
              primary_mode="trailing_3". If a future ship fixes the 2025
              data issue, the pre-declared bar can be rerun.
+```
+
+### R-016 — EWMA base + negative-binomial count distribution  (added 2026-11-26, active Week 12)
+
+```
+condition:   always (the whole W12 formula).
+applies to:  both markets.
+effect:      base = EWMA of this season's games, half-life 3 games;
+             WR shrunk toward last season with 3 pseudo-games, RB not.
+             my_p = NegBin(mean = base, size = 12.5 RB / 26.7 WR) tail
+             on the queued side of the line; clamp [0.02, 0.98].
+replaces:    R-003b, R-010, R-010cap, R-008, R-011, R-014 (base chain);
+             R-005c + normal CDF (distribution); R-002 (matchup).
+reasoning:   the base chain was four patches on one problem (trailing-3
+             too short); R-005c widened sigma to hide mean error;
+             R-003/R-008 support depended on game-day look-ahead; R-002
+             showed no signal. Full audit in "Between Week 11 and Week 12".
+backtest:    vs method as logged, pooled 2023-25, pregame info:
+             WR +0.0103 [+0.0066, +0.0143], RB −0.0011 [−0.0061, +0.0041],
+             all +0.0046 [+0.0015, +0.0080]. PIT deciles flat (0.087-0.113)
+             vs R-005c's 0.008-0.185.
+governance:  pre-declared ship rule in plans/R-016-count-dist-ewma.md was
+             overridden by the owner (dated note in that plan). Chosen by
+             evidence, not gated by a pre-registered test.
+tooling:     nflcal/data.py base_r016; slate.py writes it to base_*_r008;
+             tools/calc.py compute_myp_r016 / nb_cdf; ui.html estimateProb
+             / nbCdf; validate.py --mode r016 [--pregame-info].
 ```
 
 ### R-NNN  (added week N)

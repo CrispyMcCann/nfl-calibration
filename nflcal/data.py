@@ -1441,3 +1441,51 @@ def r008_net_of_r010(trailing: float, base_r010: float, base_r008: float) -> flo
     d = max(0.0, r10 - r8)
     already = max(0.0, tr - r10)
     return round(max(0.0, r10 - max(0.0, d - already)), 2)
+
+
+# ---------------------------------------------------------------------------
+# R-016 (W12): the whole formula-input base. Replaces the W11 chain
+# R-003 → R-010 → R-010cap → R-008/R-011 → R-014, which survives only as
+# diagnostic columns. Evidence: plans/R-016-count-dist-ewma.md and
+# METHODOLOGY.md "Week 12". One exponentially weighted mean over every
+# game the player has played this season (newest weighted most; weight
+# halves every R016_HALFLIFE games), shrunk toward last season's mean
+# with R016_PRIOR_K pseudo-games. RB uses no prior: the 2023-25 audit
+# found last season's RB rate is a poor anchor (the reason R-014 had
+# to exist).
+# ---------------------------------------------------------------------------
+R016_HALFLIFE = 3.0
+R016_PRIOR_K = {"RB": 0.0, "WR": 3.0}
+
+
+def base_r016(season: int, player: str, through_week: int,
+              market: str, position: str) -> tuple[float, str]:
+    """R-016 base for `market` ('rushing' / 'receiving') from games played
+    through `through_week`. Returns (base, audit_note)."""
+    ps = _player_stats(season)
+    if "season_type" in ps:
+        ps = ps[ps.season_type == "REG"]
+    col = "carries" if market == "rushing" else "receptions"
+    hist = (ps[(ps.player_display_name == player) & (ps.week <= through_week)]
+            .sort_values("week")[col].fillna(0).astype(float).values)
+    pos = "RB" if position == "RB" else "WR"
+    k = R016_PRIOR_K[pos]
+    prior, prior_n = prior_full_season(season, player, market)
+    has_prior = prior is not None and prior_n >= 5
+    n = len(hist)
+    if n == 0:
+        if has_prior:
+            return round(float(prior), 2), f"R-016: no games this season; prior-season mean {prior:.2f} (n={prior_n})"
+        fb = R010_POSITIONAL_PRIOR_RB if pos == "RB" else R010_POSITIONAL_PRIOR_WR
+        return float(fb), f"R-016: no games this season or last; positional mean {fb:.1f}"
+    w = 0.5 ** (np.arange(n)[::-1] / R016_HALFLIFE)
+    ew = float((w * hist).sum() / w.sum())
+    if k > 0 and has_prior:
+        base = (n * ew + k * float(prior)) / (n + k)
+        note = (f"R-016: ewma(h={R016_HALFLIFE:g}) {ew:.2f} over {n} g, "
+                f"+ prior {prior:.2f} x{k:g} pseudo-g -> {base:.2f}")
+    else:
+        base = ew
+        why = "no prior used for RB" if pos == "RB" else "no prior-season data"
+        note = f"R-016: ewma(h={R016_HALFLIFE:g}) {ew:.2f} over {n} g ({why})"
+    return round(max(0.0, base), 2), note
